@@ -12,6 +12,7 @@ from unified_query_builder.cbc.query_builder import (
 )
 from unified_query_builder.cbc.schema_loader import normalise_search_type
 from unified_query_builder.server_runtime import ServerRuntime
+from unified_query_builder.server_tools_shared import attach_rag_context
 
 logger = logging.getLogger(__name__)
 
@@ -106,15 +107,14 @@ def register_cbc_tools(mcp: FastMCP, runtime: ServerRuntime) -> None:
             logger.info("Built CBC query for search_type=%s", metadata.get("search_type"))
 
             intent = payload.get("natural_language_intent")
-            if intent and runtime.ensure_rag_initialized():
-                try:
-                    context = runtime.rag_service.search(intent, k=5, source_filter="cbc")
-                    if context:
-                        metadata = {**metadata, "rag_context": context}
-                except Exception as exc:  # pragma: no cover - defensive
-                    logger.warning("⚠️ Unable to attach CBC RAG context: %s", exc)
-            elif intent:
-                logger.debug("⏳ RAG not ready, skipping context retrieval for CBC query")
+            metadata = attach_rag_context(
+                runtime=runtime,
+                intent=intent,
+                metadata=metadata,
+                source_filter="cbc",
+                provider_label="CBC",
+                logger=logger,
+            )
 
             return {"query": query, "metadata": metadata}
         except CBCQueryBuildError as exc:

@@ -12,6 +12,7 @@ from unified_query_builder.cortex.query_builder import (
 )
 from unified_query_builder.cortex.schema_loader import normalise_dataset
 from unified_query_builder.server_runtime import ServerRuntime
+from unified_query_builder.server_tools_shared import attach_rag_context
 
 logger = logging.getLogger(__name__)
 
@@ -107,15 +108,14 @@ def register_cortex_tools(mcp: FastMCP, runtime: ServerRuntime) -> None:
             logger.info("Built Cortex query for dataset=%s", metadata.get("dataset"))
 
             intent = builder_kwargs.get("natural_language_intent")
-            if intent and runtime.ensure_rag_initialized():
-                try:
-                    context = runtime.rag_service.search(intent, k=5, source_filter="cortex")
-                    if context:
-                        metadata = {**metadata, "rag_context": context}
-                except Exception as exc:  # pragma: no cover - defensive
-                    logger.warning("⚠️ Unable to attach Cortex RAG context: %s", exc)
-            elif intent:
-                logger.debug("⏳ RAG not ready, skipping context retrieval for Cortex query")
+            metadata = attach_rag_context(
+                runtime=runtime,
+                intent=intent,
+                metadata=metadata,
+                source_filter="cortex",
+                provider_label="Cortex",
+                logger=logger,
+            )
 
             return {"query": query, "metadata": metadata}
         except (CortexQueryBuildError, ValueError) as exc:
