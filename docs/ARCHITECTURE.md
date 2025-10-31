@@ -375,6 +375,10 @@ if table not in schema:
    class PlatformSchemaCache:
        def load(self) -> Dict: ...
        def list_fields(self, dataset: str) -> List: ...
+   
+   def build_platform_documents(schema: Dict) -> List[str]:
+       """Build RAG documents from schema."""
+       # Implementation...
    ```
 
 2. **Create query builder**:
@@ -383,27 +387,70 @@ if table not in schema:
    def build_query(schema: Dict, **kwargs) -> Tuple[str, Dict]: ...
    ```
 
-3. **Create RAG document builder**:
+3. **Create tool registration module**:
    ```python
-   # platform/schema_loader.py
-   def build_platform_documents(schema: Dict) -> List[str]: ...
+   # server_tools_platform.py
+   from typing import Dict, Any
+   from fastmcp import FastMCP
+   from pydantic import BaseModel, Field
+   
+   def register_platform_tools(mcp: FastMCP, runtime: ServerRuntime):
+       """Register all platform-specific tools."""
+       
+       @mcp.tool
+       def platform_build_query(params: PlatformBuildQueryParams) -> Dict[str, Any]:
+           """Build a platform query."""
+           schema = runtime.platform_cache.load()
+           query, metadata = build_platform_query(schema, **params.model_dump())
+           
+           # Enhance with RAG if natural language provided
+           if params.natural_language_intent:
+               runtime.ensure_rag_initialized(timeout=5.0)
+               try:
+                   context = runtime.rag_service.search(
+                       params.natural_language_intent,
+                       k=5,
+                       source_filter="platform"
+                   )
+                   metadata["rag_context"] = context
+               except Exception as e:
+                   logger.warning(f"RAG enhancement failed: {e}")
+           
+           return {"query": query, "metadata": metadata}
    ```
 
-4. **Register with unified server**:
+4. **Update ServerRuntime**:
+   ```python
+   # server_runtime.py
+   class ServerRuntime:
+       def __init__(self, data_dir: Path):
+           # ... existing initialization ...
+           
+           # Add new platform cache
+           self.platform_cache = PlatformSchemaCache(...)
+           
+           # Add to RAG service sources
+           self.rag_service = UnifiedRAGService(
+               sources=[
+                   # ... existing sources ...
+                   SchemaSource(
+                       name="platform",
+                       schema_cache=self.platform_cache,
+                       loader=lambda c, f: c.load(force_refresh=f),
+                       document_builder=build_platform_documents,
+                   ),
+               ],
+               cache_dir=self.data_dir,
+           )
+   ```
+
+5. **Register in main server**:
    ```python
    # server.py
-   platform_cache = PlatformSchemaCache(...)
-
-   rag_service.add_source(SchemaSource(
-       name="platform",
-       schema_cache=platform_cache,
-       loader=lambda c, f: c.load(force_refresh=f),
-       document_builder=build_platform_documents,
-   ))
-
-   @mcp.tool
-   def platform_build_query(params: PlatformBuildQueryParams):
-       # Implementation...
+   from unified_query_builder.server_tools_platform import register_platform_tools
+   
+   runtime = ServerRuntime()
+   register_platform_tools(mcp, runtime)
    ```
 
 ### Adding New Tools

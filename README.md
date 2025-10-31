@@ -17,15 +17,12 @@ A suite of Model Context Protocol (MCP) servers and utilities that help security
     - [Carbon Black Cloud Builder](#carbon-black-cloud-builder)
     - [Cortex XDR Builder](#cortex-xdr-builder)
     - [SentinelOne Builder](#sentinelone-builder)
-    - [CrowdStrike Humio Research](#crowdstrike-humio-research)
   - [Getting Started (Local Python)](#getting-started-local-python)
   - [Running with Docker](#running-with-docker)
     - [Unified Query Builder](#unified-query-builder-1)
-    - [Defender KQL Builder](#defender-kql-builder)
     - [Running Multiple Builders Together](#running-multiple-builders-together)
   - [Connecting from VS Code Cline](#connecting-from-vs-code-cline)
   - [Testing](#testing)
-  - [Roadmap](#roadmap)
   - [Additional Resources](#additional-resources)
     - [Quick Links](#quick-links)
     - [For Developers](#for-developers)
@@ -60,15 +57,17 @@ Comprehensive documentation is available to help you get started and understand 
 ## Repository Layout
 | Path | Description |
 | --- | --- |
-| `kql_builder/` | Standalone Defender XDR KQL MCP server with schema scraping, caching, logging utilities, and Docker assets. |
-| `unified_query_builder/` | Consolidated MCP server that bundles KQL, CBC, Cortex XDR, and SentinelOne builders behind a single FastMCP entry point. |
-| `unified_query_builder/cbc/` | Carbon Black Cloud search schema loaders, query builders, and RAG document builders. |
+| `unified_query_builder/` | **Main unified server** - Modular MCP server bundling all platform builders with shared RAG enhancement. |
+| `unified_query_builder/server.py` | FastMCP entry point with minimal orchestration logic. |
+| `unified_query_builder/server_runtime.py` | Runtime coordination, schema management, and two-phase initialization. |
+| `unified_query_builder/server_tools_*.py` | Modular tool registration files, one per platform (kql, cbc, cortex, s1, shared). |
+| `unified_query_builder/cbc/` | Carbon Black Cloud schema loaders, query builders, and RAG document builders. |
 | `unified_query_builder/cortex/` | Cortex XDR dataset loaders, pipeline builders, function/operator references, and metadata exporters. |
-| `unified_query_builder/kql/` | Shared Defender KQL schema cache, query builder, and example query catalog used by both unified and standalone servers. |
+| `unified_query_builder/kql/` | Shared Defender KQL schema cache, query builder, and example query catalog. |
 | `unified_query_builder/s1/` | SentinelOne schema loader, dataset inference helpers, and query builder utilities. |
-| `cs_builder/` | Research assets for future CrowdStrike Humio support (extracted documentation, schema notes). |
+| `unified_query_builder/shared/` | Shared components including unified RAG service and configuration. |
 | `tests/` | Pytest suite covering builders, schema caching, RAG behavior, and transport guards. |
-| `docs/` | Additional documentation including RAG internals, schema management, and migration guides. |
+| `docs/` | Comprehensive documentation including architecture, API reference, deployment guides, and RAG internals. |
 
 ## Service Capabilities
 
@@ -102,10 +101,6 @@ The recommended entry point for production workflows. Key capabilities include:
 - Schema loader backed by the curated SentinelOne exports in `s1_builder/`.
 - Query builder with dataset inference (`infer_dataset`) and boolean defaults to streamline query authoring.
 - RAG document builder so SentinelOne fields and examples are searchable alongside other platforms.
-
-### CrowdStrike Humio Research
-- `cs_builder/` contains extracted Humio reference events and schema planning notes.
-- Future work will convert these assets into a dedicated MCP toolset once schema normalization is complete.
 
 ## Getting Started (Local Python)
 1. **Create a virtual environment** (Python 3.10+ recommended):
@@ -141,14 +136,6 @@ docker compose up --build -d
 - Exposes SSE transport on `http://localhost:8080/sse`.
 - Persists schema and embedding caches in the `unified_query_builder_cache` named volume.
 - Health checks ensure the server is reachable before clients attach.
-
-### Defender KQL Builder
-```bash
-cd kql_builder
-docker compose up --build -d
-```
-- Runs the standalone KQL server on `http://localhost:8083` (docs at `/docs`, SSE at `/sse`).
-- Uses the `kql_mcp_cache` volume for schema persistence.
 
 ### Running Multiple Builders Together
 If you want each builder available individually over SSE, start each Compose project in its directory. Ports default to:
@@ -191,12 +178,6 @@ pytest tests/test_cbc_builder.py
 pytest tests/test_cortex_builder.py
 pytest tests/test_schema_cache.py
 ```
-
-## Roadmap
-- Finalize the Humio builder with structured schema exports and parity tooling.
-- Expand SentinelOne coverage with additional example queries and regression tests.
-- Publish ready-to-import MCP client configs for Cursor, Continue, Claude Desktop, and other extensions.
-- Add workflow automation around query templating and sharing between analysts.
 
 ## Additional Resources
 
