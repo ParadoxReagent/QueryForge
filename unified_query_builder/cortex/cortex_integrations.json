@@ -1,0 +1,24 @@
+{
+  "cortex_xdr_query_schema": {
+    "integration_notes": {
+      "api_usage": {
+        "description": "Using XQL queries with Cortex XDR API",
+        "notes": [
+          "XQL queries can be executed via REST API",
+          "API returns results asynchronously - poll for completion",
+          "Large result sets (>1000 rows) may be gzipped",
+          "Query quota limits apply - check available quota",
+          "Use query_name parameter to track queries"
+        ]
+      },
+      "xsoar_integration": {
+        "description": "Integration with Cortex XSOAR",
+        "commands": [
+          "xdr-xql-generic-query - Execute any XQL query",
+          "xdr-xql-file-dropper-query - Search for file droppers",
+          "xdr-xql-process-causality-network-activity-query - Network activity by causality"
+        ]
+      }
+    }
+  }
+}

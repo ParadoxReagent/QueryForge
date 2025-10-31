@@ -1,0 +1,204 @@
+{
+  "cortex_xdr_query_schema": {
+    "xdr_data_fields": {
+      "_insert_time": {
+        "type": "INTEGER",
+        "nullable": false,
+        "description": "System field: The time the data entry was added to the system",
+        "group": "system"
+      },
+      "_product": {
+        "type": "STRING",
+        "nullable": false,
+        "description": "System field: The data product as ingested from the data collector",
+        "group": "system"
+      },
+      "_raw_json": {
+        "type": "RECORD",
+        "nullable": false,
+        "description": "System field: All raw data as ingested from the data collector in a JSON format",
+        "group": "system"
+      },
+      "_raw_log": {
+        "type": "STRING",
+        "nullable": false,
+        "description": "System field: All raw data as ingested from the data collector in a text format",
+        "group": "system"
+      },
+      "_time": {
+        "type": "INTEGER",
+        "nullable": false,
+        "description": "System field: Data entry's timestamp. If unknown, then the time the data entry was added to the database",
+        "group": "system",
+        "searchable": true,
+        "default_field": true
+      },
+      "_vendor": {
+        "type": "STRING",
+        "nullable": false,
+        "description": "System field: The data vendor as ingested from the data collector",
+        "group": "system"
+      },
+      "action_threat_ids": {
+        "type": "STRING",
+        "nullable": true,
+        "description": "Threat IDs",
+        "group": "action"
+      },
+      "additional_info": {
+        "type": "STRING",
+        "nullable": false,
+        "description": "Additional information for any event that occurred (GlobalProtect)",
+        "group": "action"
+      },
+      "agent_content_version": {
+        "type": "STRING",
+        "nullable": true,
+        "description": "The agent content version",
+        "group": "agent"
+      },
+      "agent_external_ip": {
+        "type": "STRING",
+        "nullable": false,
+        "description": "External IP of the agent reporting this event",
+        "group": "agent",
+        "searchable": true
+      },
+      "agent_host_boot_time": {
+        "type": "INTEGER",
+        "nullable": true,
+        "description": "Last time this host was started in epoch time",
+        "group": "agent"
+      },
+      "agent_hostname": {
+        "type": "STRING",
+        "nullable": true,
+        "description": "Hostname of the agent",
+        "group": "agent",
+        "searchable": true,
+        "default_field": true
+      },
+      "agent_id": {
+        "type": "STRING",
+        "nullable": true,
+        "description": "A unique identifier per agent",
+        "group": "agent",
+        "searchable": true,
+        "default_field": true
+      },
+      "agent_install_type": {
+        "type": "INTEGER",
+        "nullable": true,
+        "description": "Agent installation type: 0=Standard, 1=VDI instance, 2=VDI golden image, 4=Temporary session, 5=Light agent",
+        "group": "agent",
+        "values": [
+          0,
+          1,
+          2,
+          4,
+          5
+        ]
+      },
+      "agent_ip_addresses": {
+        "type": "STRING",
+        "nullable": true,
+        "description": "All IPv4 interface addresses",
+        "group": "agent",
+        "searchable": true
+      },
+      "agent_ip_addresses_v6": {
+        "type": "STRING",
+        "nullable": true,
+        "description": "All IPv6 interface addresses",
+        "group": "agent",
+        "searchable": true
+      },
+      "agent_is_vdi": {
+        "type": "BOOLEAN",
+        "nullable": true,
+        "description": "Indicates whether or not the agent is a VDI agent",
+        "group": "agent"
+      },
+      "agent_os_sub_type": {
+        "type": "STRING",
+        "nullable": true,
+        "description": "A lengthier description of the operating system (OS) type",
+        "group": "agent"
+      },
+      "agent_os_type": {
+        "type": "INTEGER",
+        "nullable": true,
+        "description": "Operating system type: 1=Windows, 2=MacOS, 4=Linux",
+        "group": "agent",
+        "values": [
+          1,
+          2,
+          4
+        ]
+      },
+      "agent_session_start_time": {
+        "type": "INTEGER",
+        "nullable": true,
+        "description": "Indicates when the agent was started",
+        "group": "agent"
+      },
+      "agent_version": {
+        "type": "STRING",
+        "nullable": true,
+        "description": "The agent version",
+        "group": "agent"
+      },
+      "event_type": {
+        "type": "INTEGER",
+        "nullable": true,
+        "description": "Event type identifier: 1=Process, 2=Network, 3=File, 4=Registry, 5=Injection, 6=LoadImage, 7=UserStatusChange, 8=TimeChange, 9=Thread, 10=Causality, 11=HostStatusChange, 12=AgentStatusChange, 13=InternalStatistics, 14=ProcessHandle, 15=WindowsEventLog, 16=EpmStatus, 17=MetadataChange, 18=SystemCall, 19=Device, 23=HostFirewall",
+        "group": "event",
+        "searchable": true,
+        "default_field": true,
+        "values": [
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18,
+          19,
+          23
+        ]
+      },
+      "event_sub_type": {
+        "type": "INTEGER",
+        "nullable": true,
+        "description": "Event sub-type - varies based on event_type. Use XQL autocomplete to see valid values",
+        "group": "event",
+        "searchable": true,
+        "default_field": true
+      },
+      "event_id": {
+        "type": "STRING",
+        "nullable": true,
+        "description": "Event identifier",
+        "group": "event",
+        "searchable": true
+      },
+      "event_timestamp": {
+        "type": "INTEGER",
+        "nullable": true,
+        "description": "Integer indicating when the event occurred",
+        "group": "event"
+      }
+    }
+  }
+}

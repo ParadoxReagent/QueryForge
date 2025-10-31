@@ -1,0 +1,1025 @@
+{
+  "cortex_xdr_query_schema": {
+    "version": "1.0",
+    "description": "Cortex XDR XQL query syntax and field definitions for building queries programmatically",
+    "last_updated": "2025-10-04",
+    
+    "operators": {
+      "logical": {
+        "AND": {
+          "syntax": ["and", "AND"],
+          "description": "Boolean AND operator - combines conditions where both must be true",
+          "examples": [
+            "event_type = ENUM.PROCESS and agent_hostname = 'server01'",
+            "action_file_extension = 'exe' AND digsig_result = 'unsigned'"
+          ]
+        },
+        "OR": {
+          "syntax": ["or", "OR"],
+          "description": "Boolean OR operator - combines conditions where either can be true",
+          "examples": [
+            "actor_process_image_name = 'powershell.exe' or actor_process_image_name = 'cmd.exe'",
+            "event_type = ENUM.FILE OR event_type = ENUM.PROCESS"
+          ]
+        },
+        "NOT": {
+          "syntax": ["not", "NOT", "!="],
+          "description": "Boolean NOT operator - excludes matching records",
+          "examples": [
+            "actor_process_image_name != 'svchost.exe'",
+            "NOT agent_hostname contains 'test'"
+          ]
+        }
+      },
+      "comparison": {
+        "EQUALS": {
+          "symbol": "=",
+          "description": "Exact match comparison",
+          "examples": ["event_type = ENUM.PROCESS", "agent_id = '12345'"]
+        },
+        "NOT_EQUALS": {
+          "symbol": "!=",
+          "description": "Not equal comparison",
+          "examples": ["event_sub_type != ENUM.PROCESS_START"]
+        },
+        "GREATER_THAN": {
+          "symbol": ">",
+          "description": "Greater than comparison for numbers and timestamps",
+          "examples": ["_time > current_time() - interval '1 hour'", "action_upload > 1000000"]
+        },
+        "LESS_THAN": {
+          "symbol": "<",
+          "description": "Less than comparison for numbers and timestamps",
+          "examples": ["clipboard_data_size < 1024"]
+        },
+        "GREATER_EQUAL": {
+          "symbol": ">=",
+          "description": "Greater than or equal comparison",
+          "examples": ["http_rsp_code >= 400"]
+        },
+        "LESS_EQUAL": {
+          "symbol": "<=",
+          "description": "Less than or equal comparison",
+          "examples": ["http_rsp_code <= 599"]
+        }
+      },
+      "string": {
+        "CONTAINS": {
+          "syntax": "contains",
+          "description": "Check if string field contains substring (case-insensitive by default)",
+          "examples": [
+            "action_process_image_command_line contains 'powershell'",
+            "agent_hostname contains 'server'"
+          ]
+        },
+        "REGEX_MATCH": {
+          "syntax": "~=",
+          "description": "Regular expression pattern matching",
+          "examples": [
+            "action_process_image_name ~= '.*\\.(?:pdf|docx)\\.exe'",
+            "dns_query_name ~= '^[0-9a-f]{32}\\.(com|net)$'"
+          ]
+        },
+        "IN": {
+          "syntax": "in",
+          "description": "Check if value exists in a list",
+          "examples": [
+            "actor_process_image_name in ('powershell.exe', 'cmd.exe', 'wscript.exe')",
+            "event_type in (ENUM.FILE, ENUM.PROCESS)"
+          ]
+        },
+        "NOT_IN": {
+          "syntax": "not in",
+          "description": "Check if value does not exist in a list",
+          "examples": ["action_file_extension not in ('dll', 'sys')"]
+        }
+      },
+      "special": {
+        "IS_NULL": {
+          "syntax": "= null",
+          "description": "Check if field is null/empty",
+          "examples": ["action_evtlog_data_fields != null"]
+        },
+        "BETWEEN": {
+          "syntax": "between",
+          "description": "Range check for numeric or timestamp values",
+          "examples": ["_time between timestamp('2024-01-01') and timestamp('2024-01-31')"]
+        }
+      }
+    },
+
+    "datasets": {
+      "xdr_data": {
+        "description": "Primary dataset containing all endpoint and network telemetry from Cortex XDR agents",
+        "use_cases": [
+          "Process execution analysis",
+          "Network traffic monitoring",
+          "File operations tracking",
+          "Registry modifications",
+          "Authentication events",
+          "Windows Event Log analysis"
+        ],
+        "performance_notes": "Most comprehensive dataset; use specific filters to optimize performance"
+      },
+      "firewall_logs": {
+        "description": "Next-Generation Firewall traffic logs",
+        "use_cases": ["Network traffic analysis", "Threat detection", "URL filtering events"]
+      },
+      "endpoints": {
+        "description": "Endpoint inventory and configuration data",
+        "use_cases": ["Asset discovery", "Endpoint status monitoring", "Group assignments"]
+      },
+      "ad_users": {
+        "description": "Active Directory user information",
+        "use_cases": ["User identity correlation", "Group membership analysis"]
+      },
+      "ad_computers": {
+        "description": "Active Directory computer information",
+        "use_cases": ["Computer inventory", "OU membership", "Security group analysis"]
+      }
+    },
+
+    "field_types": {
+      "STRING": {
+        "description": "Text field, case-insensitive by default",
+        "operators": ["=", "!=", "contains", "~=", "in", "not in"],
+        "examples": ["agent_hostname = 'server01'", "action_file_path contains 'temp'"]
+      },
+      "INTEGER": {
+        "description": "Numeric integer value",
+        "operators": ["=", "!=", "<", ">", "<=", ">=", "between"],
+        "examples": ["event_type = 1", "clipboard_data_size > 1024"]
+      },
+      "FLOAT": {
+        "description": "Numeric floating-point value",
+        "operators": ["=", "!=", "<", ">", "<=", ">=", "between"],
+        "examples": ["story_version >= 1.5"]
+      },
+      "BOOLEAN": {
+        "description": "True/false value",
+        "operators": ["=", "!="],
+        "examples": ["agent_is_vdi = true", "event_is_replay != false"]
+      },
+      "TIMESTAMP": {
+        "description": "Date and time value",
+        "operators": ["=", "!=", "<", ">", "<=", ">=", "between"],
+        "format": "ISO 8601 or epoch time",
+        "examples": ["_time > current_time() - interval '24 hours'", "serverTime between timestamp('2024-01-01') and timestamp('2024-01-31')"]
+      },
+      "RECORD": {
+        "description": "Nested JSON object with sub-fields",
+        "access": "Use arrow notation or json_extract function",
+        "examples": [
+          "action_evtlog_data_fields->TargetUserName",
+          "json_extract(auth_normalized_user, '$.username')"
+        ]
+      },
+      "REPEATED": {
+        "description": "Array of values",
+        "operators": ["arrayexpand", "arrayfilter", "in"],
+        "examples": ["arrayexpand dns_resolutions", "dfe_labels in ('malware', 'suspicious')"]
+      }
+    },
+
+    "xql_functions": {
+      "dataset": {
+        "description": "Select the data source for the query",
+        "syntax": "dataset = <dataset_name>",
+        "position": "first",
+        "required": true,
+        "examples": [
+          "dataset = xdr_data",
+          "dataset = firewall_logs"
+        ]
+      },
+      "filter": {
+        "description": "Apply filtering conditions to narrow results",
+        "syntax": "| filter <condition>",
+        "position": "any",
+        "multiple_allowed": true,
+        "examples": [
+          "| filter event_type = ENUM.PROCESS",
+          "| filter agent_hostname contains 'server'",
+          "| filter _time > current_time() - interval '1 hour'"
+        ]
+      },
+      "fields": {
+        "description": "Select specific fields to return in results",
+        "syntax": "| fields <field1>, <field2>, ...",
+        "position": "any",
+        "examples": [
+          "| fields agent_hostname, actor_process_image_name, _time",
+          "| fields action_file_path as FilePath, agent_hostname as Hostname"
+        ]
+      },
+      "alter": {
+        "description": "Create new fields or modify existing ones",
+        "syntax": "| alter <new_field> = <expression>",
+        "position": "any",
+        "examples": [
+          "| alter Username = action_evtlog_data_fields->TargetUserName",
+          "| alter FileSize_MB = action_file_size / 1048576"
+        ]
+      },
+      "comp": {
+        "description": "Perform aggregations and computations",
+        "syntax": "| comp <aggregation>(<field>) [as <alias>] [by <grouping_field>]",
+        "position": "any",
+        "aggregations": ["count", "sum", "avg", "min", "max", "values", "unique"],
+        "examples": [
+          "| comp count() as total_events",
+          "| comp count() by agent_hostname",
+          "| comp sum(action_upload) as total_upload by actor_process_image_name"
+        ]
+      },
+      "sort": {
+        "description": "Sort results by one or more fields",
+        "syntax": "| sort [asc|desc] <field>",
+        "position": "any",
+        "examples": [
+          "| sort desc _time",
+          "| sort asc agent_hostname, desc event_timestamp"
+        ]
+      },
+      "limit": {
+        "description": "Restrict the number of returned results",
+        "syntax": "| limit <number>",
+        "position": "typically last",
+        "examples": [
+          "| limit 100",
+          "| limit 1000"
+        ]
+      },
+      "join": {
+        "description": "Combine data from multiple datasets",
+        "syntax": "| join [type=<join_type>] (<dataset_query>) as <alias> <join_condition>",
+        "types": ["inner", "left", "right"],
+        "examples": [
+          "| join (dataset = endpoints | fields endpoint_name, group_names) as ep ep.endpoint_name = agent_hostname",
+          "| join type=left (preset=ad_users | fields security_identifier, member_of) as ad ad.security_identifier = auth_identity_sid"
+        ]
+      },
+      "dedup": {
+        "description": "Remove duplicate records based on specified fields",
+        "syntax": "| dedup <field1>, <field2>, ...",
+        "position": "any",
+        "examples": [
+          "| dedup agent_hostname",
+          "| dedup agent_hostname, actor_process_image_name"
+        ]
+      },
+      "arrayexpand": {
+        "description": "Expand array fields into separate rows",
+        "syntax": "| arrayexpand <array_field>",
+        "position": "any",
+        "examples": [
+          "| arrayexpand dns_resolutions"
+        ]
+      }
+    },
+
+    "time_filters": {
+      "presets": {
+        "last_hour": {
+          "description": "Query data from the last 60 minutes",
+          "syntax": "_time > current_time() - interval '1 hour'"
+        },
+        "last_24_hours": {
+          "description": "Query data from the last 24 hours",
+          "syntax": "_time > current_time() - interval '24 hours'"
+        },
+        "last_7_days": {
+          "description": "Query data from the last 7 days",
+          "syntax": "_time > current_time() - interval '7 days'"
+        },
+        "last_30_days": {
+          "description": "Query data from the last 30 days",
+          "syntax": "_time > current_time() - interval '30 days'"
+        }
+      },
+      "custom": {
+        "absolute": {
+          "description": "Specify exact timestamps",
+          "examples": [
+            "_time > timestamp('2024-01-01 00:00:00')",
+            "_time between timestamp('2024-01-01') and timestamp('2024-01-31')"
+          ]
+        },
+        "relative": {
+          "description": "Relative to current time",
+          "syntax": "current_time() - interval '<value> <unit>'",
+          "units": ["second", "minute", "hour", "day", "week", "month"],
+          "examples": [
+            "_time > current_time() - interval '2 hours'",
+            "_time > current_time() - interval '3 days'"
+          ]
+        }
+      },
+      "recommendations": {
+        "default_range": "24 hours for most investigations",
+        "maximum_range": "Data retention varies by deployment (typically 30-90 days)",
+        "performance_note": "Smaller time ranges significantly improve query speed"
+      }
+    },
+
+    "xdr_data_fields": {
+      "_insert_time": {
+        "type": "INTEGER",
+        "nullable": false,
+        "description": "System field: The time the data entry was added to the system",
+        "group": "system"
+      },
+      "_product": {
+        "type": "STRING",
+        "nullable": false,
+        "description": "System field: The data product as ingested from the data collector",
+        "group": "system"
+      },
+      "_raw_json": {
+        "type": "RECORD",
+        "nullable": false,
+        "description": "System field: All raw data as ingested from the data collector in a JSON format",
+        "group": "system"
+      },
+      "_raw_log": {
+        "type": "STRING",
+        "nullable": false,
+        "description": "System field: All raw data as ingested from the data collector in a text format",
+        "group": "system"
+      },
+      "_time": {
+        "type": "INTEGER",
+        "nullable": false,
+        "description": "System field: Data entry's timestamp. If unknown, then the time the data entry was added to the database",
+        "group": "system",
+        "searchable": true,
+        "default_field": true
+      },
+      "_vendor": {
+        "type": "STRING",
+        "nullable": false,
+        "description": "System field: The data vendor as ingested from the data collector",
+        "group": "system"
+      },
+      "action_threat_ids": {
+        "type": "STRING",
+        "nullable": true,
+        "description": "Threat IDs",
+        "group": "action"
+      },
+      "additional_info": {
+        "type": "STRING",
+        "nullable": false,
+        "description": "Additional information for any event that occurred (GlobalProtect)",
+        "group": "action"
+      },
+      "agent_content_version": {
+        "type": "STRING",
+        "nullable": true,
+        "description": "The agent content version",
+        "group": "agent"
+      },
+      "agent_external_ip": {
+        "type": "STRING",
+        "nullable": false,
+        "description": "External IP of the agent reporting this event",
+        "group": "agent",
+        "searchable": true
+      },
+      "agent_host_boot_time": {
+        "type": "INTEGER",
+        "nullable": true,
+        "description": "Last time this host was started in epoch time",
+        "group": "agent"
+      },
+      "agent_hostname": {
+        "type": "STRING",
+        "nullable": true,
+        "description": "Hostname of the agent",
+        "group": "agent",
+        "searchable": true,
+        "default_field": true
+      },
+      "agent_id": {
+        "type": "STRING",
+        "nullable": true,
+        "description": "A unique identifier per agent",
+        "group": "agent",
+        "searchable": true,
+        "default_field": true
+      },
+      "agent_install_type": {
+        "type": "INTEGER",
+        "nullable": true,
+        "description": "Agent installation type: 0=Standard, 1=VDI instance, 2=VDI golden image, 4=Temporary session, 5=Light agent",
+        "group": "agent",
+        "values": [0, 1, 2, 4, 5]
+      },
+      "agent_ip_addresses": {
+        "type": "STRING",
+        "nullable": true,
+        "description": "All IPv4 interface addresses",
+        "group": "agent",
+        "searchable": true
+      },
+      "agent_ip_addresses_v6": {
+        "type": "STRING",
+        "nullable": true,
+        "description": "All IPv6 interface addresses",
+        "group": "agent",
+        "searchable": true
+      },
+      "agent_is_vdi": {
+        "type": "BOOLEAN",
+        "nullable": true,
+        "description": "Indicates whether or not the agent is a VDI agent",
+        "group": "agent"
+      },
+      "agent_os_sub_type": {
+        "type": "STRING",
+        "nullable": true,
+        "description": "A lengthier description of the operating system (OS) type",
+        "group": "agent"
+      },
+      "agent_os_type": {
+        "type": "INTEGER",
+        "nullable": true,
+        "description": "Operating system type: 1=Windows, 2=MacOS, 4=Linux",
+        "group": "agent",
+        "values": [1, 2, 4]
+      },
+      "agent_session_start_time": {
+        "type": "INTEGER",
+        "nullable": true,
+        "description": "Indicates when the agent was started",
+        "group": "agent"
+      },
+      "agent_version": {
+        "type": "STRING",
+        "nullable": true,
+        "description": "The agent version",
+        "group": "agent"
+      },
+      "event_type": {
+        "type": "INTEGER",
+        "nullable": true,
+        "description": "Event type identifier: 1=Process, 2=Network, 3=File, 4=Registry, 5=Injection, 6=LoadImage, 7=UserStatusChange, 8=TimeChange, 9=Thread, 10=Causality, 11=HostStatusChange, 12=AgentStatusChange, 13=InternalStatistics, 14=ProcessHandle, 15=WindowsEventLog, 16=EpmStatus, 17=MetadataChange, 18=SystemCall, 19=Device, 23=HostFirewall",
+        "group": "event",
+        "searchable": true,
+        "default_field": true,
+        "values": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 23]
+      },
+      "event_sub_type": {
+        "type": "INTEGER",
+        "nullable": true,
+        "description": "Event sub-type - varies based on event_type. Use XQL autocomplete to see valid values",
+        "group": "event",
+        "searchable": true,
+        "default_field": true
+      },
+      "event_id": {
+        "type": "STRING",
+        "nullable": true,
+        "description": "Event identifier",
+        "group": "event",
+        "searchable": true
+      },
+      "event_timestamp": {
+        "type": "INTEGER",
+        "nullable": true,
+        "description": "Integer indicating when the event occurred",
+        "group": "event"
+      }
+    },
+
+    "example_queries": {
+      "process_execution": [
+        {
+          "title": "PowerShell execution with encoded commands",
+          "description": "Detect PowerShell processes with base64 encoded command arguments",
+          "query": "dataset = xdr_data\n| filter event_type = ENUM.PROCESS and event_sub_type = ENUM.PROCESS_START\n| filter actor_process_image_name = 'powershell.exe'\n| filter action_process_image_command_line contains '-enc'\n| fields agent_hostname, action_process_image_command_line, _time\n| limit 100",
+          "use_case": "malware_detection"
+        },
+        {
+          "title": "Suspicious process execution from temp directories",
+          "description": "Find processes executing from temporary directories",
+          "query": "dataset = xdr_data\n| filter event_type = ENUM.PROCESS\n| filter action_file_path contains 'temp' or action_file_path contains 'tmp'\n| filter action_file_extension = 'exe'\n| fields agent_hostname, action_file_path, actor_process_image_name, _time\n| limit 100",
+          "use_case": "malware_detection"
+        }
+      ],
+      "network_activity": [
+        {
+          "title": "External network connections",
+          "description": "Find processes making external network connections",
+          "query": "dataset = xdr_data\n| filter event_type = ENUM.NETWORK\n| filter is_internal_ip = false\n| fields agent_hostname, actor_process_image_name, action_remote_ip, action_remote_port, _time\n| limit 100",
+          "use_case": "network_analysis"
+        },
+        {
+          "title": "High volume data uploads",
+          "description": "Detect processes uploading large amounts of data",
+          "query": "dataset = xdr_data\n| filter event_type = ENUM.NETWORK\n| comp sum(action_upload) as total_upload by actor_process_image_name, action_remote_ip\n| filter total_upload > 10000000\n| sort desc total_upload\n| limit 50",
+          "use_case": "data_exfiltration"
+        }
+      ],
+      "file_operations": [
+        {
+          "title": "File creation in startup folders",
+          "description": "Detect files created in Windows startup locations",
+          "query": "dataset = xdr_data\n| filter event_type = ENUM.FILE and event_sub_type = ENUM.FILE_CREATE_NEW\n| filter action_file_path contains 'startup'\n| fields agent_hostname, action_file_path, actor_process_image_name, _time\n| limit 100",
+          "use_case": "persistence"
+        }
+      ],
+      "authentication": [
+        {
+          "title": "Failed login attempts",
+          "description": "Find failed authentication events",
+          "query": "dataset = xdr_data\n| filter event_type = ENUM.EVENT_LOG\n| filter action_evtlog_event_id = 4625\n| alter Username = action_evtlog_data_fields->TargetUserName\n| alter SourceIP = action_evtlog_data_fields->IpAddress\n| fields agent_hostname, Username, SourceIP, _time\n| limit 100",
+          "use_case": "authentication_analysis"
+        }
+      ],
+      "registry_operations": [
+        {
+          "title": "Registry Run key modifications",
+          "description": "Detect modifications to registry Run keys for persistence",
+          "query": "dataset = xdr_data\n| filter event_type = ENUM.REGISTRY\n| filter action_registry_key_name contains 'run'\n| fields agent_hostname, action_registry_key_name, action_registry_value_name, actor_process_image_name, _time\n| limit 100",
+          "use_case": "persistence"
+        }
+      ]
+    },
+
+    "best_practices": {
+      "performance": [
+        "Always specify time ranges using _time filter to limit data scanned",
+        "Filter on event_type first as it's highly indexed",
+        "Use specific field filters before broad contains/regex operations",
+        "Limit result sets with | limit to avoid overwhelming queries",
+        "Use comp aggregations to reduce result volumes before detailed analysis"
+      ],
+      "query_construction": [
+        "Start with dataset selection",
+        "Apply most selective filters first (event_type, agent_id, time range)",
+        "Use | fields to select only needed columns",
+        "Combine related filters in single filter stage when possible",
+        "Use alter to create computed fields for complex expressions"
+      ],
+      "dataset_selection": [
+        "Use xdr_data for endpoint telemetry (processes, files, registry)",
+        "Use firewall_logs for network traffic from NGFWs",
+        "Join with endpoints dataset for asset context",
+        "Join with ad_users/ad_computers for identity correlation"
+      ],
+      "field_usage": [
+        "Use ENUM values for event_type and event_sub_type for clarity",
+        "Extract nested JSON fields with -> operator or json_extract()",
+        "Use alter to create readable aliases for complex field names",
+        "Check field nullability before filtering to avoid missing results"
+      ]
+    },
+
+    "query_building_guidelines": {
+      "step_1_identify_intent": {
+        "description": "Understand what data you're searching for",
+        "questions": [
+          "What type of activity? (process, network, file, authentication)",
+          "What specific indicators? (IP, hash, filename, user)",
+          "What time frame is relevant?",
+          "What output fields are needed for analysis?"
+        ]
+      },
+      "step_2_select_dataset": {
+        "description": "Choose the appropriate data source",
+        "decision_tree": {
+          "endpoint_activity": "xdr_data",
+          "network_firewall": "firewall_logs",
+          "asset_inventory": "endpoints",
+          "user_identity": "ad_users",
+          "computer_identity": "ad_computers"
+        },
+        "considerations": [
+          "xdr_data contains most endpoint and network telemetry",
+          "Consider data retention periods",
+          "Plan joins early if correlating multiple datasets"
+        ]
+      },
+      "step_3_define_filters": {
+        "description": "Build filtering logic",
+        "rules": [
+          "Start with event_type filter for xdr_data",
+          "Add time range filter (_time)",
+          "Apply specific field filters (agent_hostname, process names, etc.)",
+          "Use contains for substring matching, ~= for regex",
+          "Combine with AND/OR as needed"
+        ]
+      },
+      "step_4_add_stages": {
+        "description": "Apply XQL functions for transformation and output",
+        "stages": [
+          "| alter - Create computed fields or extract nested data",
+          "| comp - Aggregate data (count, sum, etc.)",
+          "| join - Combine with other datasets",
+          "| fields - Select output columns",
+          "| sort - Order results",
+          "| limit - Restrict result count"
+        ]
+      },
+      "step_5_validate": {
+        "description": "Check query syntax and logic",
+        "validations": [
+          "Dataset is specified first",
+          "All field names are spelled correctly",
+          "ENUM values are used where appropriate",
+          "Nested field access uses correct syntax",
+          "Aggregations have proper grouping",
+          "Time filters are correctly formatted"
+        ]
+      }
+    },
+
+    "common_use_cases": {
+      "malware_detection": {
+        "description": "Detecting malware execution and behavior",
+        "indicators": [
+          "Unsigned or untrusted binaries",
+          "Execution from temp/download directories",
+          "Suspicious process relationships",
+          "Known malicious hashes"
+        ],
+        "key_fields": [
+          "actor_process_image_name",
+          "action_file_path",
+          "action_file_signature_status",
+          "action_file_md5",
+          "action_file_sha256"
+        ]
+      },
+      "lateral_movement": {
+        "description": "Detecting lateral movement across the network",
+        "indicators": [
+          "Remote process execution (PsExec, WMI)",
+          "Unusual authentication patterns",
+          "SMB file sharing activity",
+          "Remote desktop connections"
+        ],
+        "key_fields": [
+          "actor_process_image_name",
+          "action_remote_ip",
+          "auth_identity",
+          "action_evtlog_event_id"
+        ],
+        "example_queries": [
+          {
+            "description": "Detect PsExec usage",
+            "query": "dataset = xdr_data | filter event_type = ENUM.PROCESS | filter actor_process_image_name = 'psexec.exe' | fields agent_hostname, action_process_image_command_line, _time"
+          }
+        ]
+      },
+      "data_exfiltration": {
+        "description": "Detecting potential data exfiltration",
+        "indicators": [
+          "Large volume data uploads",
+          "Connections to cloud storage services",
+          "Compression/archiving tools",
+          "Unusual outbound traffic patterns"
+        ],
+        "key_fields": [
+          "action_upload",
+          "action_remote_ip",
+          "action_external_hostname",
+          "actor_process_image_name",
+          "action_file_extension"
+        ],
+        "example_queries": [
+          {
+            "description": "High volume uploads by process",
+            "query": "dataset = xdr_data | filter event_type = ENUM.NETWORK | comp sum(action_upload) as total_upload by actor_process_image_name, action_remote_ip | filter total_upload > 10000000 | sort desc total_upload"
+          }
+        ]
+      },
+      "persistence": {
+        "description": "Detecting persistence mechanisms",
+        "indicators": [
+          "Registry Run key modifications",
+          "Startup folder file creation",
+          "Scheduled task creation",
+          "Service installation"
+        ],
+        "key_fields": [
+          "action_registry_key_name",
+          "action_file_path",
+          "action_evtlog_event_id",
+          "actor_process_image_name"
+        ],
+        "example_queries": [
+          {
+            "description": "Registry Run key changes",
+            "query": "dataset = xdr_data | filter event_type = ENUM.REGISTRY | filter action_registry_key_name contains 'run' | fields agent_hostname, action_registry_key_name, actor_process_image_name, _time"
+          }
+        ]
+      },
+      "privilege_escalation": {
+        "description": "Detecting privilege escalation attempts",
+        "indicators": [
+          "Token manipulation",
+          "Credential dumping",
+          "Exploits targeting system processes",
+          "UAC bypass techniques"
+        ],
+        "key_fields": [
+          "event_type",
+          "event_sub_type",
+          "actor_process_image_name",
+          "action_process_image_name"
+        ]
+      },
+      "credential_access": {
+        "description": "Detecting credential theft attempts",
+        "indicators": [
+          "LSASS memory access",
+          "SAM/SYSTEM registry access",
+          "Credential dumping tools",
+          "Kerberos ticket requests"
+        ],
+        "key_fields": [
+          "actor_process_image_name",
+          "action_registry_key_name",
+          "action_file_path",
+          "krb_tgs_data",
+          "krb_tgt_data"
+        ]
+      }
+    },
+
+    "enum_values": {
+      "event_type": {
+        "PROCESS": {"value": 1, "description": "Process execution events"},
+        "NETWORK": {"value": 2, "description": "Network connection events"},
+        "FILE": {"value": 3, "description": "File operation events"},
+        "REGISTRY": {"value": 4, "description": "Registry modification events"},
+        "INJECTION": {"value": 5, "description": "Code injection events"},
+        "LOAD_IMAGE": {"value": 6, "description": "DLL/module load events"},
+        "USER_STATUS_CHANGE": {"value": 7, "description": "User session change events"},
+        "TIME_CHANGE": {"value": 8, "description": "System time change events"},
+        "THREAD": {"value": 9, "description": "Thread creation events"},
+        "CAUSALITY": {"value": 10, "description": "Causality chain events"},
+        "HOST_STATUS_CHANGE": {"value": 11, "description": "Host status change events"},
+        "AGENT_STATUS_CHANGE": {"value": 12, "description": "Agent status change events"},
+        "INTERNAL_STATISTICS": {"value": 13, "description": "Internal statistics events"},
+        "PROCESS_HANDLE": {"value": 14, "description": "Process handle events"},
+        "EVENT_LOG": {"value": 15, "description": "Windows Event Log events"},
+        "EPM_STATUS": {"value": 16, "description": "EPM status events"},
+        "METADATA_CHANGE": {"value": 17, "description": "Metadata change events"},
+        "SYSTEM_CALL": {"value": 18, "description": "System call events"},
+        "DEVICE": {"value": 19, "description": "Device events"},
+        "HOST_FIREWALL": {"value": 23, "description": "Host firewall events"}
+      },
+      "event_sub_type_process": {
+        "PROCESS_START": {"description": "Process creation"},
+        "PROCESS_STOP": {"description": "Process termination"}
+      },
+      "event_sub_type_file": {
+        "FILE_CREATE_NEW": {"description": "New file creation"},
+        "FILE_WRITE": {"description": "File modification"},
+        "FILE_REMOVE": {"description": "File deletion"},
+        "FILE_RENAME": {"description": "File rename"},
+        "FILE_OPEN": {"description": "File open/access"}
+      },
+      "agent_os_type": {
+        "WINDOWS": {"value": 1, "description": "Windows operating system"},
+        "MACOS": {"value": 2, "description": "MacOS operating system"},
+        "LINUX": {"value": 4, "description": "Linux operating system"}
+      },
+      "auth_outcome": {
+        "SUCCESS": {"value": "success", "description": "Authentication succeeded"},
+        "FAIL": {"value": "fail", "description": "Authentication failed"},
+        "UNKNOWN": {"value": "unknown", "description": "Authentication outcome unknown"},
+        "SKIPPED": {"value": "SKIPPED", "description": "Authentication skipped"},
+        "ALLOW": {"value": "ALLOW", "description": "Authentication allowed"},
+        "DENY": {"value": "DENY", "description": "Authentication denied"},
+        "CHALLENGE": {"value": "CHALLENGE", "description": "Authentication challenge required"}
+      }
+    },
+
+    "special_techniques": {
+      "json_extraction": {
+        "description": "Extract values from JSON/RECORD fields",
+        "methods": [
+          {
+            "name": "Arrow notation",
+            "syntax": "<field>-><subfield>",
+            "examples": [
+              "action_evtlog_data_fields->TargetUserName",
+              "auth_normalized_user->username"
+            ]
+          },
+          {
+            "name": "json_extract function",
+            "syntax": "json_extract(<field>, '$.path')",
+            "examples": [
+              "json_extract(action_evtlog_data_fields, '$.TargetUserName')",
+              "json_extract_scalar(http_data, '$.uri')"
+            ]
+          }
+        ]
+      },
+      "array_operations": {
+        "description": "Work with REPEATED fields (arrays)",
+        "operations": [
+          {
+            "name": "arrayexpand",
+            "description": "Expand array into separate rows",
+            "example": "| arrayexpand dns_resolutions"
+          },
+          {
+            "name": "arrayfilter",
+            "description": "Filter array elements",
+            "example": "| alter admins = arrayfilter(member_of, '@element' contains 'Admin')"
+          },
+          {
+            "name": "in operator",
+            "description": "Check if value exists in array",
+            "example": "| filter 'malware' in dfe_labels"
+          }
+        ]
+      },
+      "string_operations": {
+        "description": "String manipulation functions",
+        "functions": [
+          {
+            "name": "concat",
+            "description": "Concatenate strings",
+            "example": "| alter full_path = concat(action_file_path, '\\\\', action_file_name)"
+          },
+          {
+            "name": "regextract",
+            "description": "Extract using regex",
+            "example": "| alter domain = arrayindex(regextract(action_external_hostname, '([^.]+\\\\.[^.]+)), 0)"
+          },
+          {
+            "name": "replace",
+            "description": "Replace substrings",
+            "example": "| alter clean_name = replace(process_name, '\"', '')"
+          }
+        ]
+      },
+      "time_functions": {
+        "description": "Time manipulation functions",
+        "functions": [
+          {
+            "name": "current_time",
+            "description": "Get current timestamp",
+            "example": "_time > current_time() - interval '1 hour'"
+          },
+          {
+            "name": "timestamp",
+            "description": "Convert string to timestamp",
+            "example": "_time > timestamp('2024-01-01 00:00:00')"
+          },
+          {
+            "name": "timestamp_diff",
+            "description": "Calculate time difference",
+            "example": "| alter time_diff = timestamp_diff(_time, current_time(), 'MINUTE')"
+          },
+          {
+            "name": "extract_time",
+            "description": "Extract time components",
+            "example": "| alter hour = extract_time(_time, 'HOUR')"
+          }
+        ]
+      }
+    },
+
+    "troubleshooting": {
+      "no_results": [
+        "Verify time range includes expected data",
+        "Check event_type filter is using correct ENUM value",
+        "Ensure field names are spelled correctly",
+        "Verify agent_id or agent_hostname exists in your environment",
+        "Check if filters are too restrictive when combined"
+      ],
+      "too_many_results": [
+        "Add more specific time range filter",
+        "Include event_type and event_sub_type filters",
+        "Add agent_hostname or agent_id filter to scope to specific endpoints",
+        "Use comp to aggregate before reviewing details",
+        "Add | limit to prevent overwhelming results"
+      ],
+      "syntax_errors": [
+        "Ensure dataset is specified first",
+        "Check all pipes (|) are properly placed between stages",
+        "Verify ENUM values are capitalized (ENUM.PROCESS not enum.process)",
+        "Ensure nested field access uses -> or json_extract correctly",
+        "Check for unmatched quotes or parentheses"
+      ],
+      "performance_issues": [
+        "Always include _time filter to limit data scanned",
+        "Filter on event_type first as it's highly indexed",
+        "Avoid leading wildcards in regex patterns",
+        "Use comp to reduce data volume before complex operations",
+        "Consider breaking complex queries into multiple simpler queries"
+      ],
+      "null_values": [
+        "Many fields are NULLABLE - check with '!= null' before filtering",
+        "Use coalesce() to provide default values for nulls",
+        "Use replacenull() to replace null with specific value",
+        "Remember REPEATED fields may be empty arrays, not null"
+      ]
+    },
+
+    "advanced_patterns": {
+      "threat_hunting": {
+        "description": "Advanced queries for proactive threat hunting",
+        "examples": [
+          {
+            "name": "Process hollowing detection",
+            "query": "dataset = xdr_data | filter event_type = ENUM.INJECTION | filter event_sub_type = ENUM.INJECTION_HOLLOW_PROCESS | fields agent_hostname, actor_process_image_name, action_process_image_name, _time"
+          },
+          {
+            "name": "Credential dumping via LSASS access",
+            "query": "dataset = xdr_data | filter event_type = ENUM.PROCESS_HANDLE | filter action_process_image_name = 'lsass.exe' | filter actor_process_image_name not in ('svchost.exe', 'wininit.exe') | fields agent_hostname, actor_process_image_name, _time"
+          },
+          {
+            "name": "Kerberoasting detection",
+            "query": "dataset = xdr_data | filter event_type = ENUM.EVENT_LOG | filter action_evtlog_event_id = 4769 | alter ServiceName = action_evtlog_data_fields->ServiceName | alter TicketOptions = action_evtlog_data_fields->TicketOptions | filter TicketOptions = '0x40810000' | fields agent_hostname, ServiceName, _time"
+          }
+        ]
+      },
+      "correlation_queries": {
+        "description": "Correlate events across different types",
+        "examples": [
+          {
+            "name": "Process to network correlation",
+            "query": "dataset = xdr_data | filter event_type = ENUM.PROCESS and actor_process_image_name = 'powershell.exe' | join (dataset = xdr_data | filter event_type = ENUM.NETWORK) as net net.actor_process_instance_id = actor_process_instance_id | fields agent_hostname, actor_process_image_command_line, net.action_remote_ip, _time"
+          }
+        ]
+      },
+      "baseline_deviation": {
+        "description": "Detect deviations from normal behavior",
+        "examples": [
+          {
+            "name": "Unusual process relationships",
+            "query": "dataset = xdr_data | filter event_type = ENUM.PROCESS | comp count() by actor_process_image_name, action_process_image_name | filter count < 5 | sort asc count"
+          }
+        ]
+      }
+    },
+
+    "integration_notes": {
+      "api_usage": {
+        "description": "Using XQL queries with Cortex XDR API",
+        "notes": [
+          "XQL queries can be executed via REST API",
+          "API returns results asynchronously - poll for completion",
+          "Large result sets (>1000 rows) may be gzipped",
+          "Query quota limits apply - check available quota",
+          "Use query_name parameter to track queries"
+        ]
+      },
+      "xsoar_integration": {
+        "description": "Integration with Cortex XSOAR",
+        "commands": [
+          "xdr-xql-generic-query - Execute any XQL query",
+          "xdr-xql-file-dropper-query - Search for file droppers",
+          "xdr-xql-process-causality-network-activity-query - Network activity by causality"
+        ]
+      }
+    },
+
+    "field_groups": {
+      "system_fields": {
+        "description": "System-generated metadata fields",
+        "prefix": "_",
+        "fields": ["_insert_time", "_product", "_raw_json", "_raw_log", "_time", "_vendor"]
+      },
+      "agent_fields": {
+        "description": "Information about the Cortex XDR agent",
+        "prefix": "agent_",
+        "fields": ["agent_hostname", "agent_id", "agent_ip_addresses", "agent_os_type", "agent_version"]
+      },
+      "action_fields": {
+        "description": "Details about actions performed (files, processes, network)",
+        "prefix": "action_",
+        "key_fields": ["action_process_image_name", "action_file_path", "action_remote_ip"]
+      },
+      "actor_fields": {
+        "description": "Information about the entity performing the action",
+        "prefix": "actor_",
+        "key_fields": ["actor_process_image_name", "actor_process_image_command_line"]
+      },
+      "event_fields": {
+        "description": "Event metadata and classification",
+        "prefix": "event_",
+        "key_fields": ["event_type", "event_sub_type", "event_id", "event_timestamp"]
+      },
+      "auth_fields": {
+        "description": "Authentication event details",
+        "prefix": "auth_",
+        "key_fields": ["auth_identity", "auth_outcome", "auth_method", "auth_server"]
+      },
+      "dst_fields": {
+        "description": "Destination/target information for network and lateral movement",
+        "prefix": "dst_",
+        "key_fields": ["dst_agent_hostname", "dst_action_external_hostname"]
+      }
+    }
+  }
+}
