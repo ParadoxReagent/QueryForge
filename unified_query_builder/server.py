@@ -142,6 +142,80 @@ import threading
 _rag_init_event = threading.Event()
 _rag_init_failed = False
 _rag_init_error: Optional[str] = None
+_server_ready = False
+
+
+def _initialize_critical_components() -> None:
+    """Initialize critical components synchronously before server starts.
+    
+    This ensures basic functionality is available immediately when the server
+    starts accepting requests.
+    """
+    global _server_ready
+    
+    try:
+        logger.info("🔍 Initializing critical components...")
+        
+        # Verify schema files exist
+        schema_checks = {
+            "CBC": CBC_SCHEMA_FILE,
+            "Cortex": CORTEX_SCHEMA_FILE,
+            "KQL": KQL_SCHEMA_DIR,
+            "S1": S1_SCHEMA_DIR,
+        }
+        
+        missing_schemas = []
+        for name, path in schema_checks.items():
+            if not path.exists():
+                logger.warning("⚠️ %s schema not found at %s", name, path)
+                missing_schemas.append(name)
+            else:
+                logger.info("✅ %s schema found", name)
+        
+        # Ensure cache directory exists
+        if not DATA_DIR.exists():
+            logger.info("🔄 Creating cache directory: %s", DATA_DIR)
+            DATA_DIR.mkdir(parents=True, exist_ok=True)
+        
+        if not DATA_DIR.is_dir() or not os.access(DATA_DIR, os.W_OK):
+            raise RuntimeError(f"Cache directory {DATA_DIR} is not writable")
+        
+        logger.info("✅ Cache directory ready: %s", DATA_DIR)
+        
+        # Load schemas synchronously (fast operation)
+        logger.info("📚 Loading schemas...")
+        try:
+            cbc_cache.load()
+            logger.info("✅ CBC schema loaded")
+        except Exception as e:
+            logger.warning("⚠️ Failed to load CBC schema: %s", e)
+        
+        try:
+            cortex_cache.load()
+            logger.info("✅ Cortex schema loaded")
+        except Exception as e:
+            logger.warning("⚠️ Failed to load Cortex schema: %s", e)
+        
+        try:
+            kql_cache.load_or_refresh()
+            logger.info("✅ KQL schema loaded")
+        except Exception as e:
+            logger.warning("⚠️ Failed to load KQL schema: %s", e)
+        
+        try:
+            s1_cache.load()
+            logger.info("✅ S1 schema loaded")
+        except Exception as e:
+            logger.warning("⚠️ Failed to load S1 schema: %s", e)
+        
+        _server_ready = True
+        logger.info("✅ Critical components initialized - server ready to accept requests")
+        
+    except Exception as exc:
+        logger.error("❌ Critical initialization failed: %s", exc, exc_info=True)
+        # Still mark server as ready to allow degraded operation
+        _server_ready = True
+        logger.warning("⚠️ Starting server in degraded mode")
 
 
 def _ensure_rag_initialized(timeout: float = 5.0) -> bool:
@@ -181,41 +255,24 @@ def _ensure_rag_initialized(timeout: float = 5.0) -> bool:
 
 
 def _initialize_rag_background() -> None:
-    """Initialize RAG service in background thread with timeout and error handling."""
+    """Initialize RAG service in background thread.
+    
+    This handles the slow indexing/embedding generation that enhances
+    query building with semantic search capabilities.
+    """
     global _rag_init_failed, _rag_init_error
     
     import time
     start_time = time.time()
     
     try:
-        logger.info("🚀 Starting background RAG initialization...")
+        logger.info("🚀 Starting background RAG enhancement initialization...")
         
-        # Check schema files exist
-        logger.info("🔍 Verifying schema files...")
-        schema_checks = {
-            "CBC": CBC_SCHEMA_FILE,
-            "Cortex": CORTEX_SCHEMA_FILE,
-            "KQL": KQL_SCHEMA_DIR,
-            "S1": S1_SCHEMA_DIR,
-        }
+        # Wait a brief moment to ensure server is fully started
+        time.sleep(0.5)
         
-        for name, path in schema_checks.items():
-            if not path.exists():
-                logger.warning("⚠️ %s schema not found at %s", name, path)
-            else:
-                logger.info("✅ %s schema found", name)
-        
-        # Check cache directory
-        if not DATA_DIR.exists():
-            logger.info("🔄 Creating cache directory: %s", DATA_DIR)
-            DATA_DIR.mkdir(parents=True, exist_ok=True)
-        
-        if not DATA_DIR.is_dir() or not os.access(DATA_DIR, os.W_OK):
-            raise RuntimeError(f"Cache directory {DATA_DIR} is not writable")
-        
-        logger.info("✅ Cache directory ready: %s", DATA_DIR)
-        
-        # Initialize RAG with timeout
+        # Initialize RAG indexing (the slow part)
+        # This builds embeddings and prepares semantic search
         rag_service.ensure_index(timeout=120.0)
         
         # Signal successful initialization
@@ -225,12 +282,12 @@ def _initialize_rag_background() -> None:
         # Log which retrieval method is being used
         if rag_service._embedding_service:
             logger.info(
-                "✅ RAG service initialized with semantic embeddings (model=%s) in %.2fs",
+                "✅ RAG enhancements ready with semantic embeddings (model=%s) in %.2fs",
                 rag_service._embedding_model,
                 duration,
             )
         else:
-            logger.info("✅ RAG service initialized with RapidFuzz fallback in %.2fs", duration)
+            logger.info("✅ RAG enhancements ready with RapidFuzz fallback in %.2fs", duration)
             
     except Exception as exc:
         duration = time.time() - start_time
@@ -239,12 +296,12 @@ def _initialize_rag_background() -> None:
         # Signal completion even on failure so tools don't hang
         _rag_init_event.set()
         logger.error(
-            "❌ RAG initialization failed after %.2fs: %s",
+            "❌ RAG enhancement initialization failed after %.2fs: %s",
             duration,
             exc,
             exc_info=True,
         )
-        logger.warning("⚠️ Tools will work without RAG context")
+        logger.warning("⚠️ Query builders will work without RAG context enhancements")
 
 
 # ---------------------------------------------------------------------------
@@ -786,12 +843,20 @@ if __name__ == "__main__":
     import threading
 
     logger.info("🚀 Starting unified query builder MCP server")
-
-    # Start RAG initialization in background thread
+    
+    # Step 1: Initialize critical components synchronously
+    # This ensures the server can handle requests immediately
+    _initialize_critical_components()
+    
+    # Step 2: Start RAG enhancement in background thread
+    # This handles the slow indexing that provides enhanced capabilities
     init_thread = threading.Thread(target=_initialize_rag_background, daemon=True, name="RAG-Init")
     init_thread.start()
-    logger.info("🔄 RAG initialization started in background thread")
+    logger.info("🔄 RAG enhancement initialization started in background")
 
+    # Step 3: Start the server
+    # Server is now ready to handle requests with basic functionality
+    # RAG enhancements will be available once background init completes
     transport = os.getenv("MCP_TRANSPORT", "stdio").lower()
     if transport == "sse":
         import uvicorn
