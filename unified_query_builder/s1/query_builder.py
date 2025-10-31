@@ -58,10 +58,14 @@ _STOPWORDS = {
 _DATASET_KEYWORDS = {
     "process": "processes",
     "processes": "processes",
+    "executable": "processes",
     "file": "files",
     "files": "files",
     "dns": "dns",
     "network": "network_actions",
+    "connection": "network_actions",
+    "connections": "network_actions",
+    "traffic": "network_actions",
     "url": "url",
     "http": "url",
     "login": "logins",
@@ -233,6 +237,7 @@ def _build_operator_map(schema: Dict[str, Any]) -> Dict[str, str]:
     """Build a case-insensitive operator normalization map from schema.
     
     Returns a dict mapping lowercase operator names to their canonical forms.
+    Maps both operator symbols and operator names to canonical symbols.
     """
     operator_map: Dict[str, str] = {}
     
@@ -246,9 +251,22 @@ def _build_operator_map(schema: Dict[str, Any]) -> Dict[str, str]:
                     name = op.get("name")
                     symbols = op.get("symbols", [])
                     if isinstance(name, str) and isinstance(symbols, list):
+                        # Map each symbol to itself
                         for symbol in symbols:
                             if isinstance(symbol, str):
                                 operator_map[symbol.lower()] = symbol
+                        
+                        # Determine canonical symbol for this operator
+                        # Prefer "=" for equality, otherwise use first symbol
+                        canonical = None
+                        if "=" in symbols:
+                            canonical = "="
+                        elif symbols:
+                            canonical = symbols[0]
+                        
+                        # Map operator name to canonical symbol
+                        if canonical and name:
+                            operator_map[name.lower()] = canonical
     
     # Load from operator variants (type-specific operators)
     variants = schema.get("operator_variants", {})
@@ -527,6 +545,8 @@ def _collect_cmdline_expressions(
     if not field:
         return []
     expressions: List[Tuple[str, Dict[str, Any]]] = []
+    
+    # First, try to extract quoted strings
     for match in _QUOTED_RE.finditer(text):
         value = match.group(1) or match.group(2)
         if not value:
@@ -535,6 +555,17 @@ def _collect_cmdline_expressions(
             continue
         expression = f"{field} contains:anycase {_quote(value)}"
         expressions.append((expression, {"type": "cmdline", "value": value, "field": field}))
+    
+    # If we didn't find anything quoted, try to extract command-line flag patterns
+    # Look for patterns like -flag, --flag, /flag
+    if not expressions and "cmdline" in text.lower():
+        cmdline_pattern = re.compile(r'[-/]([a-zA-Z][a-zA-Z0-9_]*)')
+        for match in cmdline_pattern.finditer(text):
+            value = match.group(0)  # Include the dash/slash
+            if len(value) > 2:  # Must be at least 3 characters
+                expression = f"{field} contains:anycase {_quote(value)}"
+                expressions.append((expression, {"type": "cmdline", "value": value, "field": field}))
+    
     return expressions
 
 
@@ -619,11 +650,48 @@ def build_s1_query(
         expressions.extend(nl_expressions)
         expression_details.extend(nl_meta)
 
-    base_parts: List[str] = []
+    # Validate that we have something meaningful to query BEFORE adding event filters
+    has_valid_intent = natural_language_intent and natural_language_intent.strip()
+    has_valid_filters = filters and len(filters) > 0
+    has_extracted_expressions = len(expressions) > 0
+    has_explicit_dataset = dataset is not None and dataset.strip()
+    
+    # Determine if dataset was inferred from intent (not just defaulted)
+    inferred_from_intent = False
+    if natural_language_intent and dataset_key:
+        lowered = natural_language_intent.lower()
+        for keyword, key in _DATASET_KEYWORDS.items():
+            if keyword in lowered and key == dataset_key:
+                inferred_from_intent = True
+                break
+    
+    # If we have no filters and no valid intent, that's an error
+    if not has_valid_filters and not has_valid_intent:
+        raise ValueError("Must provide either natural_language_intent, filters, or both")
+    
+    # If we have intent but no expressions were extracted from it, and no filters provided
+    if has_valid_intent and not has_extracted_expressions and not has_valid_filters:
+        # Allow if:
+        # 1. An explicit dataset was provided (user knows what they want)
+        # 2. Dataset was inferred from keywords in the intent (user indicated dataset type)
+        # 3. Dataset has event filters we can add
+        if has_explicit_dataset or inferred_from_intent or dataset_key in _DATASET_EVENT_FILTERS:
+            pass  # Allow it - this is a valid general query for the dataset
+        else:
+            # No explicit dataset, not inferred, no event filters, no extracted expressions
+            raise ValueError("No valid expressions could be generated from the provided intent")
+    
+    # Add event type filter if dataset supports it
+    if dataset_key and dataset_key in _DATASET_EVENT_FILTERS:
+        event_types = _DATASET_EVENT_FILTERS[dataset_key]
+        if event_types:
+            event_filter = f"meta.event.name in ({', '.join(_quote(t) for t in event_types)})"
+            expressions.insert(0, event_filter)
+            expression_details.insert(0, {"type": "event_filter", "dataset": dataset_key, "events": event_types})
 
     query: str
     if expressions:
-        combined = f" {operator.lower()} ".join(expressions)
+        combined = f" {operator} ".join(expressions)
         # Only wrap in parentheses if using OR with multiple expressions
         if operator == "OR" and len(expressions) > 1:
             combined = f"({combined})"
