@@ -620,23 +620,16 @@ def build_s1_query(
         expression_details.extend(nl_meta)
 
     base_parts: List[str] = []
-    base_parts.append("i.scheme='edr'")
-
-    dataset_filter_values = _DATASET_EVENT_FILTERS.get(dataset_key or "")
-    if dataset_filter_values:
-        formatted = ", ".join(_quote(value) for value in dataset_filter_values)
-        base_parts.append(f"meta.event.name in ({formatted})")
 
     query: str
     if expressions:
         combined = f" {operator.lower()} ".join(expressions)
         # Only wrap in parentheses if using OR with multiple expressions
         if operator == "OR" and len(expressions) > 1:
-            base_parts.append(f"({combined})")
-        else:
-            # For AND or single expressions, don't wrap in parentheses
-            base_parts.extend(expressions)
-    query = " and ".join(base_parts)
+            combined = f"({combined})"
+        query = combined
+    else:
+        query = ""
 
     metadata: Dict[str, Any] = {
         "dataset": dataset_key,

@@ -1,0 +1,74 @@
+# QueryForge Project Rules
+
+## Query Building - MANDATORY
+
+**CRITICAL**: When building queries for any security platform (CBC, Cortex, KQL, S1):
+
+### 1. ALWAYS Use MCP Query Builder Tools
+
+You MUST use the appropriate MCP query builder tool for the platform:
+
+- **Carbon Black Cloud**: `cbc_build_query`
+- **Cortex XDR**: `cortex_build_query`
+- **Microsoft Defender/KQL**: `kql_build_query`
+- **SentinelOne**: `s1_build_query`
+
+### 2. NEVER Manually Write Query Syntax
+
+Do NOT manually construct query strings. The query builders:
+- Use the correct field schema from actual data sources
+- Apply proper operator normalization from schema definitions
+- Handle value formatting and escaping correctly
+- Generate syntactically valid platform-specific queries
+
+### 3. Correct Field Schema Usage
+
+The query builders ensure correct field names are used:
+- **SentinelOne**: `src.process.name` (NOT `SrcProcName`)
+- **Cortex XDR**: `actor_process_image_name` (NOT `ActorProcessImageName`)
+- **KQL**: Table-specific column names
+- **CBC**: Documented field names from schema
+
+### 4. Query Building Parameters
+
+Use the appropriate parameters when calling build tools:
+
+- **natural_language_intent**: When user describes what to find in plain language
+- **filters**: For structured field/operator/value conditions
+- **dataset/table/search_type**: To specify the data source
+- **time_range/time_window**: For temporal filtering
+
+## Examples
+
+### ✅ CORRECT Approach
+```
+Use s1_build_query tool:
+{
+  "dataset": "files",
+  "natural_language_intent": "browser downloads from chrome or firefox"
+}
+```
+
+### ❌ INCORRECT Approach
+```
+Manually writing:
+"SrcProcName = 'chrome.exe'" 
+# WRONG! This uses incorrect field schema and bypasses the query builder
+```
+
+## Why This Matters
+
+1. **Field Schema Accuracy**: Platforms update their schemas; the query builder uses the current schema
+2. **Operator Validation**: Each platform has specific operators; the builder validates and normalizes them
+3. **Value Escaping**: Different platforms require different escaping (quotes, backslashes, etc.)
+4. **Syntax Correctness**: Platform-specific syntax rules are enforced by the builder
+
+## Query Development Workflow
+
+1. Understand the user's intent
+2. Identify the appropriate platform and dataset
+3. Use the corresponding MCP `*_build_query` tool
+4. Let the tool generate the syntactically correct query
+5. Present the query to the user
+
+Never skip step 3 by manually writing queries!
