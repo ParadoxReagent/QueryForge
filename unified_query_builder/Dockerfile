@@ -31,7 +31,7 @@ PY
 
 RUN mkdir -p ${APP_HOME}/unified_query_builder
 
-COPY server.py __init__.py entrypoint.sh ./unified_query_builder/
+COPY server*.py __init__.py entrypoint.sh ./unified_query_builder/
 COPY cbc ./unified_query_builder/cbc
 COPY cortex ./unified_query_builder/cortex
 COPY kql ./unified_query_builder/kql
