@@ -15,6 +15,21 @@ MAX_LIMIT = 10000
 _MD5_RE = re.compile(r"\b[a-fA-F0-9]{32}\b")
 _SHA256_RE = re.compile(r"\b[a-fA-F0-9]{64}\b")
 _IPV4_RE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
+_IPV6_RE = re.compile(
+    r"\b(?:"
+    r"(?:[0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}|"
+    r"(?:[0-9a-fA-F]{1,4}:){1,7}:|"
+    r":(?:[0-9a-fA-F]{1,4}:){1,7}|"
+    r"(?:[0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}|"
+    r"(?:[0-9a-fA-F]{1,4}:){1,5}(?::[0-9a-fA-F]{1,4}){1,2}|"
+    r"(?:[0-9a-fA-F]{1,4}:){1,4}(?::[0-9a-fA-F]{1,4}){1,3}|"
+    r"(?:[0-9a-fA-F]{1,4}:){1,3}(?::[0-9a-fA-F]{1,4}){1,4}|"
+    r"(?:[0-9a-fA-F]{1,4}:){1,2}(?::[0-9a-fA-F]{1,4}){1,5}|"
+    r"[0-9a-fA-F]{1,4}:(?::[0-9a-fA-F]{1,4}){1,6}|"
+    r":(?::[0-9a-fA-F]{1,4}){1,7}|"
+    r"::"
+    r")\b"
+)
 _PROCESS_RE = re.compile(r"\b([A-Za-z0-9_\-]+\.exe)\b", re.IGNORECASE)
 _FILE_PATH_RE = re.compile(
     r"((?:[A-Za-z]:\\\\?|\\\\)\\?(?:[^\\/:\n]+\\\\)*[^\\/:\n]+|/(?:[^/\s]+/)*[^/\s]+)"
@@ -22,6 +37,9 @@ _FILE_PATH_RE = re.compile(
 _TIME_RANGE_RE = re.compile(
     r"(?:last|past)\s+(?:(\d+)\s+)?(minute|hour|day|week|month)s?",
     re.IGNORECASE,
+)
+_DOMAIN_RE = re.compile(
+    r"\b(?:(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,})\b"
 )
 _HOST_PHRASE_RE = re.compile(
     r"(?:host|hostname|server|agent)\s+(?:named\s+)?['\"]?([A-Za-z0-9_.-]{2,})['\"]?",
@@ -165,10 +183,11 @@ def _extract_time_filters(intent: str) -> Tuple[List[str], List[Tuple[int, int]]
 def _extract_natural_language_filters(
     intent: str,
     field_map: Dict[str, Dict[str, Any]],
-) -> Tuple[List[str], List[Tuple[int, int]], List[Dict[str, Any]]]:
+) -> Tuple[List[str], List[Tuple[int, int]], List[Dict[str, Any]], List[Dict[str, Any]]]:
     expressions: List[str] = []
     spans: List[Tuple[int, int]] = []
     metadata: List[Dict[str, Any]] = []
+    unmatched: List[Dict[str, Any]] = []
     available_fields = list(_collect_fields(field_map))
 
     pattern_definitions = [
@@ -179,15 +198,34 @@ def _extract_natural_language_filters(
             _IPV4_RE,
             ["action_local_ip", "action_remote_ip", "src_ip", "dst_ip"],
         ),
+        (
+            "ipv6",
+            _IPV6_RE,
+            ["action_local_ip", "action_remote_ip", "src_ip", "dst_ip"],
+        ),
+        (
+            "domain",
+            _DOMAIN_RE,
+            [
+                "action_domain",
+                "remote_domain",
+                "dns_query_name",
+                "domain",
+                "agent_hostname",
+            ],
+        ),
     ]
 
     for label, regex, candidates in pattern_definitions:
         for match in regex.finditer(intent):
             field = _field_if_available(candidates, available_fields)
             if not field:
+                spans.append(match.span())
+                unmatched.append({"type": label, "field": None, "value": match.group(0)})
                 continue
             value = match.group(0)
-            expression = _format_filter(field, "=", value)
+            operator = "contains" if label == "domain" else "="
+            expression = _format_filter(field, operator, value)
             expressions.append(expression)
             spans.append(match.span())
             metadata.append({"type": label, "field": field, "value": value})
@@ -228,7 +266,7 @@ def _extract_natural_language_filters(
         spans.append(match.span())
         metadata.append({"type": "hostname", "field": field, "value": value})
 
-    return expressions, spans, metadata
+    return expressions, spans, metadata, unmatched
 
 
 def _extract_keywords(intent: str, spans: List[Tuple[int, int]]) -> List[str]:
@@ -276,6 +314,21 @@ def build_cortex_query(
 
     payload: Dict[str, Any]
     field_map: Dict[str, Dict[str, Any]]
+
+    if not isinstance(schema, (dict, CortexSchemaCache)):
+        raise TypeError("schema must be a mapping or CortexSchemaCache instance")
+
+    cleaned_intent: str | None = None
+    if natural_language_intent is not None:
+        if not isinstance(natural_language_intent, str):
+            raise TypeError("natural_language_intent must be a string if provided")
+        cleaned_intent = natural_language_intent.strip()
+        if not cleaned_intent:
+            raise ValueError("natural_language_intent must not be empty")
+
+    has_structured_inputs = filters is not None or bool(time_range)
+    if cleaned_intent is None and natural_language_intent is None and not has_structured_inputs:
+        raise ValueError("Either natural_language_intent or structured parameters must be provided")
 
     dataset_meta: Dict[str, Any] | None = None
 
@@ -358,15 +411,20 @@ def build_cortex_query(
         value = item.get("value") if isinstance(item, dict) else None
         if not field:
             continue
+        if field_map and field not in field_map:
+            raise KeyError(f"Field '{field}' is not available for dataset '{chosen_dataset}'")
         expression = _format_filter(field, operator, value)
         add_filter_stage(expression, {"type": "structured", "field": field, "operator": operator, "value": value})
 
-    if natural_language_intent:
-        nl_filters, spans, meta = _extract_natural_language_filters(natural_language_intent, field_map)
+    if cleaned_intent:
+        nl_filters, spans, meta, unmatched_meta = _extract_natural_language_filters(cleaned_intent, field_map)
         for expression, entry in zip(nl_filters, meta):
             add_filter_stage(expression, entry)
 
-        keyword_candidates = _extract_keywords(natural_language_intent, spans)
+        if unmatched_meta:
+            recognised.extend(unmatched_meta)
+
+        keyword_candidates = _extract_keywords(cleaned_intent, spans)
         process_names = _resolve_process_aliases(keyword_candidates)
         if process_names:
             field = _field_if_available(["actor_process_image_name", "action_file_name"], field_map)
@@ -376,14 +434,14 @@ def build_cortex_query(
                     expression,
                     {"type": "process_keyword", "field": field, "value": process_names},
                 )
-        if re.search(r"process|execution", natural_language_intent, re.IGNORECASE):
+        if re.search(r"process|execution", cleaned_intent, re.IGNORECASE):
             field = _field_if_available(["event_type"], field_map)
             if field:
                 add_filter_stage(
                     _format_filter(field, "=", "ENUM.PROCESS"),
                     {"type": "event_type", "field": field, "value": "ENUM.PROCESS"},
                 )
-        time_filters, time_spans, time_meta = _extract_time_filters(natural_language_intent)
+        time_filters, time_spans, time_meta = _extract_time_filters(cleaned_intent)
         for expression, meta_entry in zip(time_filters, time_meta):
             add_filter_stage(expression, meta_entry)
         spans.extend(time_spans)
@@ -420,7 +478,16 @@ def build_cortex_query(
                 stages.append(f"| fields {', '.join(formatted_fields)}")
                 selected_fields = list(formatted_fields)
 
-    effective_limit = DEFAULT_LIMIT if limit is None else min(max(int(limit), 1), MAX_LIMIT)
+    if limit is None:
+        effective_limit = DEFAULT_LIMIT
+    else:
+        try:
+            numeric_limit = int(limit)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("limit must be an integer") from exc
+        if numeric_limit <= 0:
+            raise ValueError("limit must be a positive integer")
+        effective_limit = min(numeric_limit, MAX_LIMIT)
     stages.append(f"| limit {effective_limit}")
 
     metadata = {

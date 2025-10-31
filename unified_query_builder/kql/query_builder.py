@@ -75,6 +75,8 @@ _CONDITION_PATTERNS = (
      lambda m: f"FileName =~ {_quote(m.group(1))}"),
     (re.compile(r"(?:running|executing)\s+['\"]?([A-Za-z0-9._\\-]+)['\"]?", re.IGNORECASE),
      lambda m: f"FileName =~ {_quote(m.group(1))}"),
+    (re.compile(r"['\"]?([A-Za-z0-9._\\-]+\.exe)['\"]?\s+process(?:es)?", re.IGNORECASE),
+     lambda m: f"FileName =~ {_quote(m.group(1))}"),
     (re.compile(r"file\s+(?:name\s+)?(?:is|=|equals?|contains|like)\s+['\"]?([A-Za-z0-9._\\-]+)['\"]?", re.IGNORECASE),
      lambda m: f"FileName =~ {_quote(m.group(1))}"),
     (re.compile(r"(?:accessing|opening|creating|deleting)\s+(?:file\s+)?['\"]?([A-Za-z0-9._\\-]+)['\"]?", re.IGNORECASE),
@@ -128,6 +130,8 @@ _CONDITION_PATTERNS = (
     (re.compile(r"domain\s+(?:is|=|equals?|contains)\s+['\"]?([A-Za-z0-9._-]+)['\"]?", re.IGNORECASE),
      lambda m: f"RemoteUrl endswith {_quote(m.group(1))} or RemoteUrl contains {_quote(m.group(1))}"),
     (re.compile(r"(?:visiting|accessing)\s+(?:url\s+)?['\"]?([A-Za-z0-9._-]+)['\"]?", re.IGNORECASE),
+     lambda m: f"RemoteUrl contains {_quote(m.group(1))}"),
+    (re.compile(r"(?:connections?|traffic|requests?)\s+(?:to|from)\s+['\"]?([A-Za-z0-9._-]+)['\"]?", re.IGNORECASE),
      lambda m: f"RemoteUrl contains {_quote(m.group(1))}"),
 )
 
@@ -278,12 +282,10 @@ def _validate_limit(limit: Optional[int]) -> int:
         try:
             limit = int(limit)
         except (ValueError, TypeError):
-            logger.warning(f"Invalid limit value, using default: {limit}")
-            return 100
+            raise ValueError("limit must be an integer value") from None
 
     if limit < 1:
-        logger.warning(f"Limit must be positive, using default: {limit}")
-        return 100
+        raise ValueError("limit must be a positive integer")
 
     if limit > 10000:
         logger.warning(f"Limit is very large ({limit}), consider using a smaller value")
@@ -432,32 +434,34 @@ def _nl_to_structured(schema: Dict[str, Any], intent: str) -> Dict[str, Any]:
         logger.warning("Empty or None natural language intent provided")
         return _get_default_query_params()
 
-    text = intent.lower().strip()
-    logger.info(f"Parsing natural language intent: {text}")
+    stripped_intent = intent.strip()
+    logger.info("Parsing natural language intent: %s", stripped_intent)
+
+    lowered = stripped_intent.lower()
 
     # Initialize query parameters
     params = _get_default_query_params()
 
     # Determine table from keywords
-    params["table"] = _infer_table_from_text(text, schema)
+    params["table"] = _infer_table_from_text(lowered, schema)
 
     # Parse time window
-    params["time_window"] = _parse_time_window_from_text(text)
+    params["time_window"] = _parse_time_window_from_text(stripped_intent)
 
     # Parse conditions and filters
-    params["where"] = _parse_conditions_from_text(text)
+    params["where"] = _parse_conditions_from_text(stripped_intent)
 
     # Parse aggregation and ordering
-    agg_result = _parse_aggregation_from_text(text)
+    agg_result = _parse_aggregation_from_text(stripped_intent)
     params.update(agg_result)
 
     # Parse limit
-    params["limit"] = _parse_limit_from_text(text)
+    params["limit"] = _parse_limit_from_text(stripped_intent)
 
     # Parse select columns if specified
-    params["select"] = _parse_select_from_text(text)
+    params["select"] = _parse_select_from_text(stripped_intent)
 
-    logger.info(f"Parsed query parameters: {params}")
+    logger.info("Parsed query parameters: %s", params)
     return params
 
 def _get_default_query_params() -> Dict[str, Any]:
@@ -570,6 +574,7 @@ def _parse_aggregation_from_text(text: str) -> Dict[str, Any]:
         return {"summarize": None, "order_by": None}
 
     result = {"summarize": None, "order_by": None}
+    lowered = text.lower()
 
     # Top/bottom patterns
     try:
@@ -590,11 +595,11 @@ def _parse_aggregation_from_text(text: str) -> Dict[str, Any]:
         logger.warning(f"Error parsing top/bottom pattern: {e}")
 
     # Count patterns
-    if "count" in text or "number of" in text or "how many" in text:
+    if any(keyword in lowered for keyword in ("count", "number of", "how many")):
         pass
 
-    if "count" in text or "number of" in text or "how many" in text:
-        if "by" in text:
+    if any(keyword in lowered for keyword in ("count", "number of", "how many")):
+        if "by" in lowered:
             try:
                 by_match = _GROUP_BY_PATTERN.search(text)
                 if by_match and len(by_match.groups()) >= 1:
@@ -657,12 +662,23 @@ def build_kql_query(
 ) -> Tuple[str, Dict[str, Any]]:
     """Build a KQL query with comprehensive input validation."""
     try:
+        if not isinstance(schema, dict):
+            raise TypeError("schema must be a dictionary of table metadata")
+
         logger.info("Building KQL query with parameters: table=%s, select=%s, where=%s, time_window=%s, summarize=%s, order_by=%s, limit=%s, natural_language_intent=%s",
                    table, select, where, time_window, summarize, order_by, limit, bool(natural_language_intent))
 
+        cleaned_intent: Optional[str] = None
+        if natural_language_intent is not None:
+            if not isinstance(natural_language_intent, str):
+                raise TypeError("natural_language_intent must be a string if provided")
+            cleaned_intent = natural_language_intent.strip()
+            if not cleaned_intent:
+                raise ValueError("natural_language_intent must not be empty")
+
         # Parse natural language intent if provided
-        if natural_language_intent:
-            derived = _nl_to_structured(schema, natural_language_intent)
+        if cleaned_intent:
+            derived = _nl_to_structured(schema, cleaned_intent)
             table = table or derived["table"]
             select = select or derived["select"]
             where = (where or []) + (derived["where"] or [])
