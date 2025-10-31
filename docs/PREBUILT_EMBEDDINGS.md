@@ -20,7 +20,7 @@ By generating embeddings ahead of time and including them in the Docker image, t
 ### Set Environment Variables
 ```bash
 export LITELLM_API_KEY="your-api-key-here"
-export LITELLM_BASE_URL="https://llm.utility-prod.ohio.redcanary.io"
+export LITELLM_BASE_URL="https://your-litellm-proxy-url"
 export LITELLM_EMBEDDING_MODEL="text-embedding-3-large"
 ```
 

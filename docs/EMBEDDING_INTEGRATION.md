@@ -48,7 +48,7 @@ Set these environment variables to enable embeddings:
 export LITELLM_API_KEY="your-api-key-here"
 
 # Optional (with defaults)
-export LITELLM_BASE_URL="https://llm.utility-prod.ohio.redcanary.io"  # LiteLLM proxy URL
+export LITELLM_BASE_URL="https://your-litellm-proxy-url"  # Your LiteLLM proxy URL
 export LITELLM_EMBEDDING_MODEL="text-embedding-3-large"  # Model name
 ```
 
@@ -59,7 +59,7 @@ The `docker-compose.yml` includes environment variable configuration:
 ```yaml
 environment:
   - LITELLM_API_KEY=${LITELLM_API_KEY:-}
-  - LITELLM_BASE_URL=${LITELLM_BASE_URL:-https://llm.utility-prod.ohio.redcanary.io}
+  - LITELLM_BASE_URL=${LITELLM_BASE_URL:-}
   - LITELLM_EMBEDDING_MODEL=${LITELLM_EMBEDDING_MODEL:-text-embedding-3-large}
 ```
 
