@@ -392,50 +392,31 @@ Create schema file (e.g., `platform_schema.json`):
 }
 ```
 
-### 6. Register with Unified Server
+### 6. Create Tool Registration Module
 
-Edit `unified_query_builder/server.py`:
+Create `unified_query_builder/server_tools_platform.py`:
 
 ```python
-# Import new platform
-from unified_query_builder.platform_name.schema_loader import (
-    PlatformSchemaCache,
-    build_platform_documents,
-)
+"""Platform Name tool registration for the unified query builder."""
+
+import logging
+from typing import Dict, Any, Optional, List
+from fastmcp import FastMCP
+from pydantic import BaseModel, Field
+
 from unified_query_builder.platform_name.query_builder import (
     build_platform_query,
     QueryBuildError as PlatformQueryBuildError,
     DEFAULT_DATASET as PLATFORM_DEFAULT_DATASET,
 )
+from unified_query_builder.server_runtime import ServerRuntime
 
-# Initialize schema cache
-PLATFORM_SCHEMA_FILE = Path(__file__).parent / "platform_name" / "platform_schema.json"
-platform_cache = PlatformSchemaCache(PLATFORM_SCHEMA_FILE)
+logger = logging.getLogger(__name__)
 
-# Add to RAG service
-def _platform_version(cache: PlatformSchemaCache) -> Optional[str]:
-    try:
-        data = cache.load()
-        return data.get("version")
-    except Exception:
-        return None
 
-rag_service = UnifiedRAGService(
-    sources=[
-        # ... existing sources ...
-        SchemaSource(
-            name="platform_name",
-            schema_cache=platform_cache,
-            loader=lambda cache, force=False: cache.load(force_refresh=force),
-            document_builder=build_platform_documents,
-            version_getter=_platform_version,
-        ),
-    ],
-    cache_dir=DATA_DIR,
-)
-
-# Define parameter models
 class PlatformBuildQueryParams(BaseModel):
+    """Parameters for building a Platform Name query."""
+    
     dataset: Optional[str] = Field(
         default=None,
         description=f"Target dataset (defaults to {PLATFORM_DEFAULT_DATASET})"
@@ -446,47 +427,177 @@ class PlatformBuildQueryParams(BaseModel):
     )
     natural_language_intent: Optional[str] = Field(
         default=None,
-        description="Natural language description"
+        description="Natural language description of what to search for"
     )
     limit: Optional[int] = Field(
         default=None,
         ge=1,
         le=10000,
-        description="Result limit"
+        description="Maximum number of results to return"
     )
 
-# Register tools
-@mcp.tool
-def platform_list_datasets() -> Dict[str, Any]:
-    """List available Platform Name datasets."""
-    datasets = platform_cache.datasets()
-    logger.info("Listing %d Platform datasets", len(datasets))
-    return {"datasets": datasets}
 
-@mcp.tool
-def platform_build_query(params: PlatformBuildQueryParams) -> Dict[str, Any]:
-    """Build a Platform Name query from structured params or natural language."""
-    schema = platform_cache.load()
-    payload = params.model_dump()
+def register_platform_tools(mcp: FastMCP, runtime: ServerRuntime) -> None:
+    """
+    Register all Platform Name tools with the MCP server.
+    
+    Args:
+        mcp: FastMCP server instance
+        runtime: ServerRuntime instance providing shared state
+    """
+    
+    @mcp.tool()
+    def platform_list_datasets() -> Dict[str, Any]:
+        """List available Platform Name datasets with descriptions."""
+        try:
+            datasets = runtime.platform_cache.datasets()
+            logger.info("Listed %d Platform datasets", len(datasets))
+            return {"datasets": datasets}
+        except Exception as exc:
+            logger.error("Failed to list Platform datasets: %s", exc)
+            return {"error": str(exc)}
+    
+    @mcp.tool()
+    def platform_get_dataset_fields(dataset: str) -> Dict[str, Any]:
+        """
+        Get available fields for a Platform Name dataset.
+        
+        Args:
+            dataset: Dataset name
+        
+        Returns:
+            Dictionary containing dataset info and field list
+        """
+        try:
+            fields = runtime.platform_cache.list_fields(dataset)
+            logger.info("Listed %d fields for Platform dataset: %s", len(fields), dataset)
+            return {
+                "dataset": dataset,
+                "fields": fields
+            }
+        except Exception as exc:
+            logger.error("Failed to get fields for dataset %s: %s", dataset, exc)
+            return {"error": str(exc)}
+    
+    @mcp.tool()
+    def platform_build_query(params: PlatformBuildQueryParams) -> Dict[str, Any]:
+        """
+        Build a Platform Name query from structured parameters or natural language.
+        
+        This tool converts your search intent into a valid Platform query. You can either:
+        - Provide structured filters with field/operator/value
+        - Describe what you want to find in natural language
+        - Combine both approaches
+        """
+        schema = runtime.platform_cache.load()
+        payload = params.model_dump()
+        
+        try:
+            query, metadata = build_platform_query(schema, **payload)
+            logger.info("Built Platform query for dataset=%s", metadata.get("dataset"))
+            
+            # Enhance with RAG context if natural language intent provided
+            intent = payload.get("natural_language_intent")
+            if intent and runtime.ensure_rag_initialized(timeout=5.0):
+                try:
+                    context = runtime.rag_service.search(
+                        intent,
+                        k=5,
+                        source_filter="platform"
+                    )
+                    if context:
+                        metadata["rag_context"] = context
+                        logger.debug("Added RAG context to Platform query metadata")
+                except Exception as exc:
+                    logger.warning("Unable to attach Platform RAG context: %s", exc)
+            
+            return {"query": query, "metadata": metadata}
+        
+        except PlatformQueryBuildError as exc:
+            logger.warning("Failed to build Platform query: %s", exc)
+            return {"error": str(exc)}
+```
 
-    try:
-        query, metadata = build_platform_query(schema, **payload)
-        logger.info("Built Platform query for dataset=%s", metadata.get("dataset"))
+### 7. Update ServerRuntime
 
-        # Add RAG context if natural language intent provided
-        intent = payload.get("natural_language_intent")
-        if intent:
-            try:
-                context = rag_service.search(intent, k=5, source_filter="platform_name")
-                if context:
-                    metadata = {**metadata, "rag_context": context}
-            except Exception as exc:
-                logger.warning("Unable to attach Platform RAG context: %s", exc)
+Edit `unified_query_builder/server_runtime.py` to add the new platform:
 
-        return {"query": query, "metadata": metadata}
-    except PlatformQueryBuildError as exc:
-        logger.warning("Failed to build Platform query: %s", exc)
-        return {"error": str(exc)}
+```python
+from unified_query_builder.platform_name.schema_loader import (
+    PlatformSchemaCache,
+    build_platform_documents,
+)
+
+class ServerRuntime:
+    def __init__(self, data_dir: Path | str = Path(".cache")) -> None:
+        # ... existing initialization ...
+        
+        # Add Platform Name schema cache
+        self.platform_schema_file = base_dir / "platform_name" / "platform_schema.json"
+        self.platform_cache = PlatformSchemaCache(
+            self.platform_schema_file,
+            cache_dir=self.data_dir
+        )
+        
+        # Update RAG service sources
+        self.rag_service = UnifiedRAGService(
+            sources=[
+                # ... existing sources ...
+                SchemaSource(
+                    name="platform",
+                    schema_cache=self.platform_cache,
+                    loader=lambda cache, force=False: cache.load(force_refresh=force),
+                    document_builder=build_platform_documents,
+                    version_getter=self._platform_version,
+                ),
+            ],
+            cache_dir=self.data_dir,
+        )
+    
+    def _platform_version(self, cache: PlatformSchemaCache) -> Optional[str]:
+        """Get Platform schema version."""
+        try:
+            data = cache.load()
+        except Exception:
+            return None
+        version = data.get("version") if isinstance(data, dict) else None
+        return str(version) if version else None
+    
+    def initialize_critical_components(self) -> None:
+        """Initialize schema caches..."""
+        # ... existing checks ...
+        
+        # Add Platform schema check
+        schema_checks = {
+            # ... existing checks ...
+            "Platform": self.platform_schema_file,
+        }
+        
+        # ... rest of initialization ...
+        
+        try:
+            self.platform_cache.load()
+            logger.info("✅ Platform schema loaded")
+        except Exception as exc:
+            logger.warning("⚠️ Failed to load Platform schema: %s", exc)
+```
+
+### 8. Register in Main Server
+
+Edit `unified_query_builder/server.py`:
+
+```python
+from unified_query_builder.server_tools_platform import register_platform_tools
+
+# ... existing imports and setup ...
+
+# Register all platform tools
+register_cbc_tools(mcp, runtime)
+register_cortex_tools(mcp, runtime)
+register_kql_tools(mcp, runtime)
+register_s1_tools(mcp, runtime)
+register_platform_tools(mcp, runtime)  # Add new platform
+register_shared_tools(mcp, runtime)
 ```
 
 ### 7. Add Tests
