@@ -12,6 +12,7 @@ from unified_query_builder.s1.query_builder import (
     infer_dataset,
 )
 from unified_query_builder.server_runtime import ServerRuntime
+from unified_query_builder.server_tools_shared import attach_rag_context
 
 logger = logging.getLogger(__name__)
 
@@ -89,15 +90,14 @@ def register_s1_tools(mcp: FastMCP, runtime: ServerRuntime) -> None:
                 metadata.get("dataset") or S1_DEFAULT_DATASET,
             )
             intent = payload.get("natural_language_intent")
-            if intent and runtime.ensure_rag_initialized():
-                try:
-                    context = runtime.rag_service.search(intent, k=5, source_filter="s1")
-                    if context:
-                        metadata = {**metadata, "rag_context": context}
-                except Exception as exc:  # pragma: no cover - defensive
-                    logger.warning("⚠️ Unable to attach SentinelOne RAG context: %s", exc)
-            elif intent:
-                logger.debug("⏳ RAG not ready, skipping context retrieval for S1 query")
+            metadata = attach_rag_context(
+                runtime=runtime,
+                intent=intent,
+                metadata=metadata,
+                source_filter="s1",
+                provider_label="SentinelOne",
+                logger=logger,
+            )
             return {"query": query, "metadata": metadata}
         except Exception as exc:  # pragma: no cover - defensive
             logger.error("Failed to build SentinelOne query: %s", exc)

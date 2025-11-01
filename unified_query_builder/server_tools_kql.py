@@ -11,6 +11,7 @@ from unified_query_builder.kql.query_builder import (
     suggest_columns,
 )
 from unified_query_builder.server_runtime import ServerRuntime
+from unified_query_builder.server_tools_shared import attach_rag_context
 
 logger = logging.getLogger(__name__)
 
@@ -112,15 +113,14 @@ def register_kql_tools(mcp: FastMCP, runtime: ServerRuntime) -> None:
             kql, meta = build_kql_query(schema=schema, **payload)
 
             intent = payload.get("natural_language_intent")
-            if intent and runtime.ensure_rag_initialized():
-                try:
-                    context = runtime.rag_service.search(intent, k=5, source_filter="kql")
-                    if context:
-                        meta = {**meta, "rag_context": context}
-                except Exception as exc:  # pragma: no cover - defensive
-                    logger.warning("⚠️ Failed to retrieve KQL RAG context: %s", exc)
-            elif intent:
-                logger.debug("⏳ RAG not ready, skipping context retrieval for KQL query")
+            meta = attach_rag_context(
+                runtime=runtime,
+                intent=intent,
+                metadata=meta,
+                source_filter="kql",
+                provider_label="KQL",
+                logger=logger,
+            )
 
             logger.info(
                 "Successfully built KQL query for table '%s'",

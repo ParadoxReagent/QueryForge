@@ -1,13 +1,70 @@
 from __future__ import annotations
 
 import logging
-from typing import Dict, Literal, Optional
+from typing import Any, Dict, Literal, Optional
 
 from fastmcp import FastMCP
 
 from unified_query_builder.server_runtime import ServerRuntime
 
 logger = logging.getLogger(__name__)
+
+
+def attach_rag_context(
+    *,
+    runtime: ServerRuntime,
+    intent: Optional[str],
+    metadata: Dict[str, Any],
+    source_filter: Literal["cbc", "kql", "cortex", "s1"],
+    provider_label: str,
+    logger: logging.Logger,
+    k: int = 5,
+) -> Dict[str, Any]:
+    """Augment metadata with RAG context for the provided natural-language intent.
+
+    This helper centralises the defensive logic for fetching semantic context across
+    the different query builders so they remain consistent over time.
+    """
+
+    if not intent:
+        return metadata
+
+    rag_metadata = dict(metadata)
+
+    if not runtime.ensure_rag_initialized():
+        logger.debug(
+            "⏳ RAG not ready, skipping context retrieval for %s query", provider_label
+        )
+        rag_metadata.setdefault("rag_context_status", "not_ready")
+        return rag_metadata
+
+    try:
+        context = runtime.rag_service.search(
+            intent, k=k, source_filter=source_filter
+        )
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning(
+            "⚠️ Unable to attach %s RAG context: %s", provider_label, exc
+        )
+        rag_metadata.update(
+            {
+                "rag_context_status": "error",
+                "rag_context_error": str(exc),
+            }
+        )
+        return rag_metadata
+
+    if context:
+        rag_metadata.update(
+            {
+                "rag_context": context,
+                "rag_context_status": "attached",
+            }
+        )
+    else:
+        rag_metadata.setdefault("rag_context_status", "no_matches")
+
+    return rag_metadata
 
 
 def register_shared_tools(mcp: FastMCP, runtime: ServerRuntime) -> None:
