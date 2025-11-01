@@ -9,13 +9,22 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_TIME_WINDOW = "7d"
 
+# Security: Input length limits to prevent ReDoS and resource exhaustion
+MAX_INTENT_LENGTH = 10000  # 10KB max for natural language intent
+MAX_WHERE_CLAUSE_LENGTH = 2000  # 2KB max for individual where clauses
+MAX_FIELD_NAME_LENGTH = 255  # Standard field name limit
+
 # Precompiled regexes reused across validation/parsing helpers.
+# SECURITY FIX: Replaced vulnerable .*? pattern with simpler non-backtracking pattern
 _WHERE_DANGEROUS_PATTERNS = (
     re.compile(r';\s*(?:drop|delete|update|insert|alter|create|truncate)', re.IGNORECASE),
     re.compile(r';\s*(?:exec|execute)\s+', re.IGNORECASE),
     re.compile(r'union\s+select', re.IGNORECASE),
     re.compile(r'--'),
-    re.compile(r'/\*.*?\*/', re.IGNORECASE | re.DOTALL),
+    # SECURITY FIX: Use atomic pattern instead of .*? to prevent ReDoS
+    # Changed from: r'/\*.*?\*/' which can cause catastrophic backtracking
+    # To: Simpler pattern that doesn't use nested quantifiers
+    re.compile(r'/\*[^*]*\*+(?:[^/*][^*]*\*+)*/', re.IGNORECASE),
 )
 
 _ORDER_BY_PATTERN = re.compile(r'^[a-zA-Z_][a-zA-Z0-9_]*\s+(?:asc|desc)$')
@@ -429,13 +438,27 @@ def _best_table(schema: Dict[str, Any], name: str) -> str:
         return name
 
 def _nl_to_structured(schema: Dict[str, Any], intent: str) -> Dict[str, Any]:
-    """Enhanced natural language to structured query parsing with better pattern matching."""
+    """
+    Enhanced natural language to structured query parsing with better pattern matching.
+
+    Security: Validates input length to prevent ReDoS and resource exhaustion attacks.
+    """
     if not intent or not intent.strip():
         logger.warning("Empty or None natural language intent provided")
         return _get_default_query_params()
 
+    # Security: Validate input length to prevent ReDoS attacks
+    if len(intent) > MAX_INTENT_LENGTH:
+        logger.error(
+            "Natural language intent exceeds maximum length (%d > %d chars). "
+            "Refusing to process potentially malicious input.",
+            len(intent),
+            MAX_INTENT_LENGTH
+        )
+        raise ValueError(f"Intent exceeds maximum length of {MAX_INTENT_LENGTH} characters")
+
     stripped_intent = intent.strip()
-    logger.info("Parsing natural language intent: %s", stripped_intent)
+    logger.info("Parsing natural language intent: %s", stripped_intent[:100] + ("..." if len(stripped_intent) > 100 else ""))
 
     lowered = stripped_intent.lower()
 

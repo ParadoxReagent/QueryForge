@@ -11,6 +11,10 @@ DEFAULT_BOOLEAN_OPERATOR = "AND"
 SUPPORTED_BOOLEAN_OPERATORS = {"AND", "OR"}
 MAX_LIMIT = 5000
 
+# Security: Input length limits to prevent ReDoS and resource exhaustion
+MAX_INTENT_LENGTH = 10000  # 10KB max for natural language intent
+MAX_VALUE_LENGTH = 2000  # 2KB max for individual field values
+
 _MD5_RE = re.compile(r"\b[a-fA-F0-9]{32}\b")
 _SHA256_RE = re.compile(r"\b[a-fA-F0-9]{64}\b")
 _IPV4_RE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
@@ -26,7 +30,10 @@ _IPV6_RE = re.compile(
     r":(?:(?::[0-9a-fA-F]{1,4}){1,7}|:))"  # Leading :: or just ::
 )
 _PORT_RE = re.compile(r"\bport\s*(?:=|is)?\s*(\d{1,5})\b", re.IGNORECASE)
-_QUOTED_VALUE_RE = re.compile(r'"([^"]+)"|\'([^\']+)\'')
+# SECURITY FIX: Limit quantifier to prevent ReDoS on very long quoted strings
+# Changed from: r'"([^"]+)"|\'([^\']+)\'' which can be slow on long strings
+# To: Pattern with bounded quantifier for better performance
+_QUOTED_VALUE_RE = re.compile(r'"([^"]{1,2000})"|\'([^\']{1,2000})\'')
 
 _PROCESS_NAME_RE = re.compile(
     r"(?:process(?:es)?|binary)\s+(?:name\s*(?:is|=|equals|was)?|named)\s+[\"']?([A-Za-z0-9_.-]+)[\"']?",
@@ -109,6 +116,15 @@ def _collect_fields(field_map: Dict[str, Dict[str, Any]]) -> List[str]:
 
 
 def _extract_patterns(intent: str, field_map: Dict[str, Dict[str, Any]]) -> Tuple[List[str], List[Tuple[int, int]], List[Dict[str, Any]]]:
+    """
+    Extract patterns from natural language intent.
+
+    Security: Validates input length to prevent ReDoS attacks.
+    """
+    # Security: Validate input length to prevent ReDoS attacks
+    if len(intent) > MAX_INTENT_LENGTH:
+        raise ValueError(f"Intent exceeds maximum length of {MAX_INTENT_LENGTH} characters")
+
     expressions: List[str] = []
     spans: List[Tuple[int, int]] = []
     metadata: List[Dict[str, Any]] = []

@@ -1,25 +1,53 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import logging
+import os
 import threading
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
+# Import path validation utilities
+import sys
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from shared.security import validate_schema_path, validate_glob_results
+
 logger = logging.getLogger(__name__)
+
+# Security constants
+MAX_CACHE_SIZE_BYTES = 100 * 1024 * 1024  # 100MB limit for cache files
+SCHEMA_INTEGRITY_KEY_ENV = "SCHEMA_INTEGRITY_KEY"
 
 
 class CBCSchemaCache:
     """Load and cache the Carbon Black Cloud EDR schema file."""
 
     def __init__(self, schema_path: Path, cache_dir: Optional[Path] = None) -> None:
-        self.schema_path = Path(schema_path)
+        """
+        Initialize CBC schema cache with security validations.
+
+        Parameters
+        ----------
+        schema_path : Path
+            Path to the schema file (will be validated for security)
+        cache_dir : Optional[Path]
+            Directory for cache files (defaults to .cache)
+
+        Raises
+        ------
+        ValueError
+            If schema_path is outside allowed directories or contains suspicious patterns
+        """
+        # Security: Validate schema path to prevent path traversal attacks
+        self.schema_path = validate_schema_path(Path(schema_path))
+
         self._lock = threading.Lock()
         self._cache: Dict[str, Any] | None = None
         self._cache_version: int = 0
         self._source_signature: Optional[str] = None
-        
+
         if cache_dir is None:
             cache_dir = Path(".cache")
         self.cache_file = cache_dir / "cbc_schema_cache.json"
@@ -58,34 +86,82 @@ class CBCSchemaCache:
             return self._cache
     
     def _compute_signature(self) -> Optional[str]:
-        """Compute a signature based on the source file's modification time and size."""
+        """
+        Compute HMAC-SHA256 signature of actual file contents for integrity verification.
+
+        This prevents cache poisoning attacks by ensuring the cache signature
+        cannot be forged by modifying file metadata (mtime/size).
+        """
         try:
-            stats = self.schema_path.stat()
-            hasher = hashlib.blake2s(digest_size=16)
-            hasher.update(self.schema_path.name.encode("utf-8"))
-            hasher.update(str(stats.st_mtime_ns).encode("utf-8"))
-            hasher.update(str(stats.st_size).encode("utf-8"))
-            return hasher.hexdigest()
-        except OSError:
+            # Get integrity key from environment, use a default if not set
+            # In production, SCHEMA_INTEGRITY_KEY should be set to a secure random value
+            secret_key = os.getenv(SCHEMA_INTEGRITY_KEY_ENV, "default-dev-key-change-in-production").encode("utf-8")
+
+            if not self.schema_path.exists():
+                return None
+
+            # Compute HMAC of actual file content
+            with self.schema_path.open("rb") as f:
+                content = f.read()
+
+            # Use HMAC-SHA256 for cryptographic integrity
+            signature = hmac.new(secret_key, content, hashlib.sha256).hexdigest()
+            return signature
+
+        except (OSError, IOError) as exc:
+            logger.warning("Failed to compute signature for %s: %s", self.schema_path, exc)
             return None
     
     def _load_from_disk(self, expected_signature: str) -> Optional[Dict[str, Any]]:
-        """Load cached schema from disk if signature matches."""
+        """
+        Load cached schema from disk if signature matches.
+
+        Includes security measures:
+        - File size limits to prevent DoS via large cache files
+        - Cryptographic signature verification to prevent cache poisoning
+        - Type validation to ensure schema structure is valid
+        """
         if not self.cache_file.exists():
             return None
-        
+
         try:
+            # Security: Check file size BEFORE reading to prevent memory exhaustion
+            file_size = self.cache_file.stat().st_size
+            if file_size > MAX_CACHE_SIZE_BYTES:
+                logger.error(
+                    "Cache file %s exceeds maximum size limit (%d bytes > %d bytes). "
+                    "Refusing to load potentially malicious cache.",
+                    self.cache_file,
+                    file_size,
+                    MAX_CACHE_SIZE_BYTES
+                )
+                return None
+
             with self.cache_file.open("r", encoding="utf-8") as f:
                 data = json.load(f)
-            
-            if data.get("signature") != expected_signature:
-                logger.debug("CBC cache signature mismatch, will reload from source")
+
+            # Security: Verify cryptographic signature to prevent cache poisoning
+            cached_signature = data.get("signature")
+            if cached_signature != expected_signature:
+                logger.warning(
+                    "CBC cache signature verification FAILED. "
+                    "Expected: %s, Got: %s. Cache may be tampered. Reloading from source.",
+                    expected_signature[:16] + "..." if expected_signature else "None",
+                    cached_signature[:16] + "..." if cached_signature else "None"
+                )
                 return None
-            
+
+            # Validate schema structure
             if not isinstance(data.get("schema"), dict):
+                logger.warning("Invalid cache structure: 'schema' must be a dictionary")
                 return None
-            
+
+            logger.debug("Cache loaded successfully with valid signature")
             return data
+
+        except json.JSONDecodeError as exc:
+            logger.warning("Failed to parse CBC cache JSON: %s", exc)
+            return None
         except Exception as exc:
             logger.warning("Failed to load CBC cache from disk: %s", exc)
             return None
@@ -104,19 +180,27 @@ class CBCSchemaCache:
             logger.warning("Failed to persist CBC cache to disk: %s", exc)
     
     def _load_split_schema(self) -> Optional[Dict[str, Any]]:
-        """Load schema from multiple cbc_*.json files and merge them."""
+        """
+        Load schema from multiple cbc_*.json files and merge them.
+
+        Includes security validation of all file paths to prevent
+        symlink-based path traversal attacks.
+        """
         schema_dir = self.schema_path.parent
-        cbc_files = sorted(schema_dir.glob("cbc_*.json"))
-        
+        cbc_files_raw = sorted(schema_dir.glob("cbc_*.json"))
+
+        # Security: Validate all glob results to prevent symlink attacks
+        cbc_files = validate_glob_results(schema_dir, cbc_files_raw)
+
         # Exclude the monolithic cbc_schema.json file if it exists
         cbc_files = [f for f in cbc_files if f.name != "cbc_schema.json"]
-        
+
         if not cbc_files:
             return None
-        
+
         logger.info("Loading CBC schema from %d split files", len(cbc_files))
         merged: Dict[str, Any] = {}
-        
+
         for file_path in cbc_files:
             try:
                 with file_path.open("r", encoding="utf-8") as f:

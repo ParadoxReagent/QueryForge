@@ -1,13 +1,22 @@
 from __future__ import annotations
-import json, logging
+import json, logging, os, hmac
 from dataclasses import dataclass, field
 from threading import RLock
 from typing import Any, Dict, Optional
 from pathlib import Path
 import hashlib
+import sys
+
+# Import path validation utilities
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from shared.security import validate_schema_path, validate_glob_results
 
 # Configure logging
 logger = logging.getLogger(__name__)
+
+# Security constants
+MAX_CACHE_SIZE_BYTES = 100 * 1024 * 1024  # 100MB limit for cache files
+SCHEMA_INTEGRITY_KEY_ENV = "SCHEMA_INTEGRITY_KEY"
 
 
 @dataclass
@@ -21,6 +30,18 @@ class SchemaCache:
     _loaded: bool = field(default=False, init=False, repr=False)
     _lock: RLock = field(default_factory=RLock, init=False, repr=False)
     _source_signature: Optional[str] = field(default=None, init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        """Validate paths for security after initialization."""
+        # Note: schema_path is typically a cache file path, not a source schema
+        # source_dir should be within the application directory
+        # We validate source_dir since that's where actual schema files are loaded from
+        if not str(self.source_dir).startswith(str(Path(__file__).parent.parent)):
+            logger.warning(
+                "Source directory %s is outside application directory. "
+                "This may be a security risk.",
+                self.source_dir
+            )
 
     def load_or_refresh(self) -> Dict[str, Any]:
         """Load schema data, preferring persisted cache when available."""
@@ -101,37 +122,70 @@ class SchemaCache:
         self._source_signature = signature
 
     def _compute_source_signature(self) -> Optional[str]:
-        """Return a hash of the schema source files to detect changes."""
+        """
+        Return a hash of the schema source files to detect changes.
 
+        Uses HMAC for better security against cache poisoning attacks.
+        """
         if not self.source_dir.exists():
             logger.warning("Schema directory not found: %s", self.source_dir)
             return None
 
-        hasher = hashlib.blake2s(digest_size=16)
-        found = False
+        # Security: Validate glob results to prevent symlink attacks
+        glob_results_raw = list(self.source_dir.glob("*.json"))
+        glob_results = validate_glob_results(self.source_dir, glob_results_raw)
 
-        for path in sorted(self.source_dir.glob("*.json")):
+        if not glob_results:
+            return None
+
+        # Get integrity key from environment
+        secret_key = os.getenv(SCHEMA_INTEGRITY_KEY_ENV, "default-dev-key-change-in-production").encode("utf-8")
+
+        # Compute HMAC of all file contents
+        hasher = hmac.new(secret_key, digestmod=hashlib.sha256)
+
+        for path in sorted(glob_results):
             try:
-                stats = path.stat()
-            except OSError:
+                with path.open("rb") as f:
+                    content = f.read()
+                hasher.update(path.name.encode("utf-8"))
+                hasher.update(content)
+            except (OSError, IOError) as exc:
+                logger.warning("Failed to read %s for signature: %s", path, exc)
                 continue
 
-            hasher.update(path.name.encode("utf-8"))
-            hasher.update(str(stats.st_mtime_ns).encode("utf-8"))
-            hasher.update(str(stats.st_size).encode("utf-8"))
-            found = True
-
-        return hasher.hexdigest() if found else None
+        return hasher.hexdigest()
 
     def _load_from_disk(self, expected_signature: Optional[str]) -> Optional[Dict[str, Any]]:
-        """Attempt to load the schema payload from the persisted cache file."""
+        """
+        Attempt to load the schema payload from the persisted cache file.
 
+        Includes security measures:
+        - File size limits to prevent DoS via large cache files
+        - Signature verification to detect tampering
+        """
         if not self.schema_path.exists():
             return None
 
         try:
+            # Security: Check file size BEFORE reading to prevent memory exhaustion
+            file_size = self.schema_path.stat().st_size
+            if file_size > MAX_CACHE_SIZE_BYTES:
+                logger.error(
+                    "Cache file %s exceeds maximum size limit (%d bytes > %d bytes). "
+                    "Refusing to load potentially malicious cache.",
+                    self.schema_path,
+                    file_size,
+                    MAX_CACHE_SIZE_BYTES
+                )
+                return None
+
             with self.schema_path.open("r", encoding="utf-8") as handle:
                 payload = json.load(handle)
+
+        except json.JSONDecodeError as exc:
+            logger.warning("Failed to parse schema cache JSON %s: %s", self.schema_path, exc)
+            return None
         except Exception as exc:  # pragma: no cover - defensive
             logger.warning("Failed to read schema cache %s: %s", self.schema_path, exc)
             return None

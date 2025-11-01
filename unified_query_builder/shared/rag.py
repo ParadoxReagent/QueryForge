@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import logging
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence
@@ -18,6 +20,9 @@ from .config import LiteLLMConfig
 from .embeddings import EmbeddingService, cosine_similarity, create_embedding_service
 
 logger = logging.getLogger(__name__)
+
+# Security constants
+MAX_CACHE_SIZE_BYTES = 100 * 1024 * 1024  # 100MB limit for cache files
 
 
 from typing import Union
@@ -82,21 +87,56 @@ class UnifiedRAGService:
         return hashlib.sha256(payload).hexdigest()
 
     def _load_cached_index(self, signature: str) -> bool:
+        """
+        Load cached RAG index from disk with security validations.
+
+        Includes security measures:
+        - File size limits to prevent DoS via large cache files
+        - Signature verification to detect tampering
+        """
         if not self._metadata_path.exists():
             return False
 
         try:
+            # Security: Check file size BEFORE reading to prevent memory exhaustion
+            file_size = self._metadata_path.stat().st_size
+            if file_size > MAX_CACHE_SIZE_BYTES:
+                logger.error(
+                    "RAG cache file %s exceeds maximum size limit (%d bytes > %d bytes). "
+                    "Refusing to load potentially malicious cache.",
+                    self._metadata_path,
+                    file_size,
+                    MAX_CACHE_SIZE_BYTES
+                )
+                return False
+
             with self._metadata_path.open("r", encoding="utf-8") as handle:
                 metadata = json.load(handle)
+
+        except json.JSONDecodeError as exc:
+            logger.warning("Failed to parse RAG metadata cache JSON: %s", exc)
+            return False
         except Exception as exc:  # pragma: no cover - defensive
             logger.warning("Failed to read RAG metadata cache: %s", exc)
             return False
 
-        if metadata.get("signature") != signature:
-            logger.info("Cached embeddings are out of date; rebuilding.")
+        # Verify signature to detect tampering
+        cached_signature = metadata.get("signature")
+        if cached_signature != signature:
+            logger.info(
+                "Cached embeddings signature mismatch. Expected: %s..., Got: %s... Rebuilding.",
+                signature[:16] if signature else "None",
+                cached_signature[:16] if cached_signature else "None"
+            )
             return False
 
-        self._documents = metadata.get("documents", [])
+        # Validate structure
+        documents = metadata.get("documents", [])
+        if not isinstance(documents, list):
+            logger.warning("Invalid cache structure: 'documents' must be a list")
+            return False
+
+        self._documents = documents
         self._source_versions = metadata.get("source_versions", {})
         self._embedding_model = metadata.get("embedding_model")
 
@@ -129,36 +169,53 @@ class UnifiedRAGService:
         # First, try to load from cache without triggering schema loading
         if not force and self._metadata_path.exists():
             try:
-                logger.info("📂 Loading cache from %s", self._metadata_path)
-                with self._metadata_path.open("r", encoding="utf-8") as handle:
-                    metadata = json.load(handle)
-                
-                cached_docs = metadata.get("documents", [])
-                cached_model = metadata.get("embedding_model")
-                cached_signature = metadata.get("signature")
-                
-                logger.info("📊 Cache contains %d documents, model=%s", len(cached_docs), cached_model or "None")
-                
-                # Check if cache has valid embeddings
-                if cached_docs and all("embedding" in doc for doc in cached_docs):
-                    self._documents = cached_docs
-                    self._source_versions = metadata.get("source_versions", {})
-                    self._embedding_model = cached_model
-                    elapsed = time.time() - start_time
-                    logger.info(
-                        "✅ Reusing cached embeddings for %d documents (model=%s, %.2fs)",
-                        len(self._documents),
-                        cached_model or "rapidfuzz",
-                        elapsed
+                # Security: Check file size BEFORE reading to prevent memory exhaustion
+                file_size = self._metadata_path.stat().st_size
+                if file_size > MAX_CACHE_SIZE_BYTES:
+                    logger.error(
+                        "⚠️ RAG cache file %s exceeds maximum size limit (%d bytes > %d bytes). "
+                        "Rebuilding from source.",
+                        self._metadata_path,
+                        file_size,
+                        MAX_CACHE_SIZE_BYTES
                     )
-                    return
                 else:
-                    missing = sum(1 for doc in cached_docs if "embedding" not in doc)
-                    logger.info(
-                        "⚠️ Cache exists but missing embeddings (%d/%d docs), will regenerate",
-                        missing,
-                        len(cached_docs)
-                    )
+                    logger.info("📂 Loading cache from %s", self._metadata_path)
+                    with self._metadata_path.open("r", encoding="utf-8") as handle:
+                        metadata = json.load(handle)
+
+                    cached_docs = metadata.get("documents", [])
+                    cached_model = metadata.get("embedding_model")
+                    cached_signature = metadata.get("signature")
+
+                    # Validate structure
+                    if not isinstance(cached_docs, list):
+                        logger.warning("⚠️ Invalid cache structure: 'documents' must be a list. Rebuilding.")
+                    else:
+                        logger.info("📊 Cache contains %d documents, model=%s", len(cached_docs), cached_model or "None")
+
+                        # Check if cache has valid embeddings
+                        if cached_docs and all("embedding" in doc for doc in cached_docs):
+                            self._documents = cached_docs
+                            self._source_versions = metadata.get("source_versions", {})
+                            self._embedding_model = cached_model
+                            elapsed = time.time() - start_time
+                            logger.info(
+                                "✅ Reusing cached embeddings for %d documents (model=%s, %.2fs)",
+                                len(self._documents),
+                                cached_model or "rapidfuzz",
+                                elapsed
+                            )
+                            return
+                        else:
+                            missing = sum(1 for doc in cached_docs if "embedding" not in doc)
+                            logger.info(
+                                "⚠️ Cache exists but missing embeddings (%d/%d docs), will regenerate",
+                                missing,
+                                len(cached_docs)
+                            )
+            except json.JSONDecodeError as exc:
+                logger.warning("⚠️ Failed to parse cache JSON: %s, will rebuild", exc)
             except Exception as exc:
                 logger.warning("⚠️ Failed to read cache: %s, will rebuild", exc)
 

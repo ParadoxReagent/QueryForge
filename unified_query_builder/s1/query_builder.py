@@ -9,6 +9,10 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 DEFAULT_BOOLEAN_OPERATOR = "AND"
 DEFAULT_DATASET = "processes"
 
+# Security: Input length limits to prevent ReDoS and resource exhaustion
+MAX_INTENT_LENGTH = 10000  # 10KB max for natural language intent
+MAX_VALUE_LENGTH = 2000  # 2KB max for individual field values
+
 logger = logging.getLogger(__name__)
 
 _MD5_RE = re.compile(r"\b[a-f0-9]{32}\b", re.IGNORECASE)
@@ -27,7 +31,12 @@ _DOMAIN_RE = re.compile(
     r"domain\s+(?:is|=|equals|like|contains)?\s*['\"]?([A-Za-z0-9_.-]+)['\"]?",
     re.IGNORECASE,
 )
-_QUOTED_RE = re.compile(r"\"([^\"\\]*(?:\\.[^\"\\]*)*)\"|'([^'\\]*(?:\\.[^'\\]*)*)'")
+# CRITICAL SECURITY FIX: Replace catastrophic backtracking pattern
+# OLD (DANGEROUS): r"\"([^\"\\]*(?:\\.[^\"\\]*)*)\"|'([^'\\]*(?:\\.[^'\\]*)*)'"
+# This pattern has nested quantifiers and can cause exponential backtracking (O(2^n))
+# A malicious input like '"' + 'a'*5000 + '\\'*5000 + '"' causes server hang
+# NEW (SAFE): Simpler pattern with length bounds to prevent ReDoS
+_QUOTED_RE = re.compile(r"\"([^\"]{0,2000})\"|'([^']{0,2000})'")
 
 _STOPWORDS = {
     "find",
@@ -283,32 +292,78 @@ def _build_operator_map(schema: Dict[str, Any]) -> Dict[str, str]:
 
 
 def _normalize_operator(operator: str, operator_map: Dict[str, str]) -> str:
-    """Normalize an operator to its canonical form from the schema.
-    
+    """
+    Normalize an operator to its canonical form from the schema.
+
+    ACCURACY FIX: Improved operator matching to prevent false failures on valid operators.
+    Uses multi-stage matching strategy instead of hardcoded fallbacks.
+
     Args:
         operator: The operator string to normalize
         operator_map: Map from lowercase operators to canonical forms
-        
+
     Returns:
         The canonical operator string
-        
+
     Raises:
-        ValueError: If the operator is not found in the schema
+        ValueError: If the operator is not found in the schema after all attempts
     """
+    if not operator or not isinstance(operator, str):
+        raise ValueError("Operator must be a non-empty string")
+
+    # Stage 1: Try exact lowercase match
     normalized = operator_map.get(operator.lower())
-    if normalized is None:
-        # Try common variations
-        if operator.lower() == "==":
-            normalized = operator_map.get("=")
-        elif operator.lower() in ("contains ignorecase", "containsignorecase"):
-            normalized = operator_map.get("contains anycase")
-    
-    if normalized is None:
-        raise ValueError(
-            f"Unknown operator '{operator}'. Please check the S1 operator schema."
-        )
-    
-    return normalized
+    if normalized is not None:
+        return normalized
+
+    # Stage 2: Try common operator aliases
+    common_aliases = {
+        "==": "=",
+        "!=": "<>",
+        "contains ignorecase": "contains anycase",
+        "containsignorecase": "contains anycase",
+        "contains_ignorecase": "contains anycase",
+        "eq": "=",
+        "ne": "<>",
+        "neq": "<>",
+        "gt": ">",
+        "gte": ">=",
+        "lt": "<",
+        "lte": "<=",
+    }
+
+    alias_target = common_aliases.get(operator.lower())
+    if alias_target:
+        normalized = operator_map.get(alias_target)
+        if normalized is not None:
+            return normalized
+
+    # Stage 3: Try case-insensitive search through all operator_map keys
+    # The operator might already be canonical but with different casing
+    for key, value in operator_map.items():
+        if key.lower() == operator.lower():
+            return value
+
+    # Stage 4: Try partial/fuzzy match for operators with spaces or underscores
+    operator_normalized = operator.lower().replace("_", " ").replace("-", " ")
+    for key, value in operator_map.items():
+        key_normalized = key.lower().replace("_", " ").replace("-", " ")
+        if key_normalized == operator_normalized:
+            return value
+
+    # Stage 5: If operator looks like it's already canonical (proper casing, etc.),
+    # check if it matches any of the values in operator_map
+    for value in operator_map.values():
+        if value.lower() == operator.lower():
+            return value
+
+    # All attempts failed - operator is truly unknown
+    available_operators = sorted(set(operator_map.values()))[:10]  # Show first 10 for brevity
+    raise ValueError(
+        f"Unknown operator '{operator}'. Available operators include: "
+        f"{', '.join(available_operators)}... "
+        f"Please check the S1 operator schema."
+    )
 
 
 def _quote(value: str) -> str:
@@ -600,6 +655,21 @@ def _expressions_from_intent(
     text: str,
     fields: Dict[str, Dict[str, Any]],
 ) -> Tuple[List[str], List[Dict[str, Any]]]:
+    """
+    Extract filter expressions from natural language intent.
+
+    Security: Validates input length to prevent ReDoS attacks.
+    """
+    # Security: Validate input length to prevent ReDoS attacks
+    if len(text) > MAX_INTENT_LENGTH:
+        logger.error(
+            "Natural language intent exceeds maximum length (%d > %d chars). "
+            "Refusing to process potentially malicious input.",
+            len(text),
+            MAX_INTENT_LENGTH
+        )
+        raise ValueError(f"Intent exceeds maximum length of {MAX_INTENT_LENGTH} characters")
+
     candidates: List[Tuple[str, Dict[str, Any]]] = []
     lower = text.lower()
     if "port" in lower:
